@@ -1,0 +1,16 @@
+[
+  {
+    "name": "ascii",
+    "hashKey": "synthetic-second-key",
+    "namespaceId": "11111111-1111-4111-8111-111111111111",
+    "instanceRef": "delivery-attempt-1",
+    "hash": "9b957afafc57f702b12228213624ee259fc4b4030fd0b04fe845a284851850e0"
+  },
+  {
+    "name": "unicode-nul-controls",
+    "hashKey": "synthetic-密钥-🔑",
+    "namespaceId": "22222222-2222-4222-9222-222222222222",
+    "instanceRef": "é/😀\u0000\"\\ \u001f<>&",
+    "hash": "49dee49f3dbc2edd4c4527b6db6605101999b8f8d0d8d56bec6646af67c5bda1"
+  }
+]

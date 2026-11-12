@@ -1,0 +1,95 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentrail-python"
+dynamic = ["version"]
+description = "Agentrail for Python backends: HTTP, identity, milestones, logs and MCP for agent journeys, over OpenTelemetry."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Agentrail" }]
+keywords = ["agentrail", "opentelemetry", "mcp", "agents", "observability", "asgi", "wsgi"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Monitoring",
+  "Typing :: Typed",
+]
+# The tested OpenTelemetry family. Its API, SDK and exporter versions move together.
+dependencies = [
+  "opentelemetry-api>=1.45.1,<1.46",
+  "opentelemetry-sdk>=1.45.1,<1.46",
+  "opentelemetry-exporter-otlp-proto-http>=1.45.1,<1.46",
+]
+
+[project.optional-dependencies]
+httpx = ["httpx>=0.28,<1"]
+requests = ["requests>=2.32,<3"]
+mcp = ["mcp>=2.3,<3"]
+
+[project.urls]
+Homepage = "https://www.agentrail.co"
+Documentation = "https://www.agentrail.co/docs/guides/journeys-python"
+Repository = "https://github.com/agentrail-co/agentrail-python"
+Issues = "https://github.com/agentrail-co/agentrail-python/issues"
+
+[dependency-groups]
+dev = [
+  "pytest>=9.2",
+  "anyio>=4.15",
+  "ruff>=0.17",
+  "pyright>=1.1.414",
+  "httpx>=0.28.1",
+  "requests>=2.34",
+  "starlette>=0.49",
+  "flask>=3.1",
+  "mcp>=2.3",
+  "uvicorn>=0.38",
+]
+
+[tool.hatch.version]
+path = "src/agentrail_python/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentrail_python"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "testdata", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.uv]
+# Resolve only releases at least two weeks old when the lock was written.
+exclude-newer = "2026-10-28T00:00:00Z"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "BLE", "SIM", "RUF", "PL", "PT"]
+ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLC0415", "PLW0603"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "BLE001", "PT011", "SIM117", "PT018"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.10"
+strict = ["src"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = ["error::DeprecationWarning:agentrail_python.*"]

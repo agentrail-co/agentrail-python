@@ -1,0 +1,219 @@
+{
+  "traceHandoff": {
+    "header": "x-agentrail-trace-handoff",
+    "maxAgeMs": 60000,
+    "fixtures": [
+      {
+        "hashKey": "synthetic-workspace-key-for-handoff-tests",
+        "input": {
+          "traceparent": "00-11111111111111111111111111111111-2222222222222222-01",
+          "hashKeyId": "65043bd0bbc7b543",
+          "issuedAt": 1793743200000,
+          "method": "POST",
+          "target": "/api/mcp?x=1+2&x=%20"
+        },
+        "token": "ah1.65043bd0bbc7b543.1793743200000.00-11111111111111111111111111111111-2222222222222222-01.1928383719116ba2a719a91e8f53adcc305b165d0c12c79648587e86d0826aa8"
+      }
+    ]
+  },
+  "markers": {
+    "maxLinkIndex": 1023,
+    "minted": [
+      {
+        "random": "0000000000000000",
+        "marker": "00000000000000"
+      },
+      {
+        "random": "ffffffffffffffff",
+        "marker": "FZZZZZZZZZZZZE"
+      },
+      {
+        "random": "0123456789abcdef",
+        "marker": "028T5CY4TQKFFX"
+      },
+      {
+        "random": "fedcba9876543210",
+        "marker": "FXQ5TK1V58CGGH"
+      }
+    ],
+    "linked": [
+      {
+        "marker": "00000000000000",
+        "lane": 0,
+        "linked": "0000000000000000"
+      },
+      {
+        "marker": "00000000000000",
+        "lane": 1,
+        "linked": "000000000000001Y"
+      },
+      {
+        "marker": "00000000000000",
+        "lane": 31,
+        "linked": "00000000000000Z1"
+      },
+      {
+        "marker": "00000000000000",
+        "lane": 32,
+        "linked": "000000000000010Z"
+      },
+      {
+        "marker": "00000000000000",
+        "lane": 1023,
+        "linked": "0000000000000ZZ2"
+      },
+      {
+        "marker": "FZZZZZZZZZZZZE",
+        "lane": 0,
+        "linked": "FZZZZZZZZZZZZ00E"
+      },
+      {
+        "marker": "FZZZZZZZZZZZZE",
+        "lane": 1,
+        "linked": "FZZZZZZZZZZZZ01C"
+      },
+      {
+        "marker": "FZZZZZZZZZZZZE",
+        "lane": 31,
+        "linked": "FZZZZZZZZZZZZ0ZF"
+      },
+      {
+        "marker": "FZZZZZZZZZZZZE",
+        "lane": 32,
+        "linked": "FZZZZZZZZZZZZ10D"
+      },
+      {
+        "marker": "FZZZZZZZZZZZZE",
+        "lane": 1023,
+        "linked": "FZZZZZZZZZZZZZZG"
+      },
+      {
+        "marker": "028T5CY4TQKFFX",
+        "lane": 0,
+        "linked": "028T5CY4TQKFF00X"
+      },
+      {
+        "marker": "028T5CY4TQKFFX",
+        "lane": 1,
+        "linked": "028T5CY4TQKFF01V"
+      },
+      {
+        "marker": "028T5CY4TQKFFX",
+        "lane": 31,
+        "linked": "028T5CY4TQKFF0ZY"
+      },
+      {
+        "marker": "028T5CY4TQKFFX",
+        "lane": 32,
+        "linked": "028T5CY4TQKFF10W"
+      },
+      {
+        "marker": "028T5CY4TQKFFX",
+        "lane": 1023,
+        "linked": "028T5CY4TQKFFZZZ"
+      },
+      {
+        "marker": "FXQ5TK1V58CGGH",
+        "lane": 0,
+        "linked": "FXQ5TK1V58CGG00H"
+      },
+      {
+        "marker": "FXQ5TK1V58CGGH",
+        "lane": 1,
+        "linked": "FXQ5TK1V58CGG01F"
+      },
+      {
+        "marker": "FXQ5TK1V58CGGH",
+        "lane": 31,
+        "linked": "FXQ5TK1V58CGG0ZJ"
+      },
+      {
+        "marker": "FXQ5TK1V58CGGH",
+        "lane": 32,
+        "linked": "FXQ5TK1V58CGG10G"
+      },
+      {
+        "marker": "FXQ5TK1V58CGGH",
+        "lane": 1023,
+        "linked": "FXQ5TK1V58CGGZZK"
+      }
+    ],
+    "parsed": [
+      {
+        "raw": "028T5CY4TQKFFX",
+        "result": {
+          "valid": true,
+          "base": "028T5CY4TQKFF",
+          "link": null
+        }
+      },
+      {
+        "raw": "028T5CY4TQKFF07F",
+        "result": {
+          "valid": true,
+          "base": "028T5CY4TQKFF",
+          "link": 7
+        }
+      },
+      {
+        "raw": "028t5cy4tqkffx",
+        "result": {
+          "valid": true,
+          "base": "028T5CY4TQKFF",
+          "link": null
+        }
+      },
+      {
+        "raw": "028T5-CY4TQKFFX",
+        "result": {
+          "valid": true,
+          "base": "028T5CY4TQKFF",
+          "link": null
+        }
+      },
+      {
+        "raw": "OOOOOOOOOOOOOO",
+        "result": {
+          "valid": true,
+          "base": "0000000000000",
+          "link": null
+        }
+      },
+      {
+        "raw": "028T5CY4TQKFFZ",
+        "result": {
+          "valid": false,
+          "reason": "check"
+        }
+      },
+      {
+        "raw": "U28T5CY4TQKFFX",
+        "result": {
+          "valid": false,
+          "reason": "alphabet"
+        }
+      },
+      {
+        "raw": "028T5CY4TQKFF",
+        "result": {
+          "valid": false,
+          "reason": "length"
+        }
+      },
+      {
+        "raw": "600",
+        "result": {
+          "valid": false,
+          "reason": "length"
+        }
+      },
+      {
+        "raw": "getting-started",
+        "result": {
+          "valid": false,
+          "reason": "check"
+        }
+      }
+    ]
+  }
+}
