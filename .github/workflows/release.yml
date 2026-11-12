@@ -1,0 +1,63 @@
+name: Release
+
+# Publishes agentrail-python to PyPI when a version tag is pushed. PyPI trusts
+# this workflow and the `pypi` environment (trusted publishing), so no token is
+# stored anywhere, and each file gets a signed attestation linking it to this
+# repository and commit. Only the repository's admins can push a `v*` tag, and
+# the `pypi` environment waits for approval before the publish job starts.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: '3.12'
+      - name: Check the tag names the package version
+        run: |
+          version="$(sed -n 's/^VERSION = "\(.*\)"$/\1/p' src/agentrail_python/_version.py)"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match agentrail-python ${version}"
+            exit 1
+          fi
+      - run: uv sync --frozen
+      - run: uv run --frozen ruff check src tests integration scripts
+      - run: uv run --frozen pyright
+      - run: uv run --frozen pytest -q
+      - run: uv build
+      - run: scripts/check-consumer.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish ${{ github.ref_name }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/agentrail-python/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      # PyPI never takes a file twice. A run that uploaded some files and then
+      # failed skips what PyPI already has on a re-run and uploads the rest.
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
+          attestations: true
