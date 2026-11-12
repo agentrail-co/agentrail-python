@@ -336,10 +336,11 @@ server.resource("catalog://items", name="catalog")(capture.resource("catalog", r
 server.prompt(name="greet")(capture.prompt("greet", greet))
 ```
 
-Each call becomes an MCP step named `mcp.tools/call:checkout`, nested under
-the HTTP request when the server runs behind the ASGI middleware
-(`agentrail.asgi(server.streamable_http_app(...))`), or its own trace
-otherwise. The middleware adds the calling client's name and version and the
+Each call becomes an MCP step named `mcp.tools/call:checkout`. Behind the
+ASGI middleware, `agentrail.asgi(server.streamable_http_app(stateless_http=True))`,
+each call nests under its HTTP request (this is the tested setup). Where the
+call runs outside a recorded request (stdio, or a session task the request did
+not start), it starts its own trace. The middleware adds the calling client's name and version and the
 protocol version; that is what the client says about itself, never an
 identity. A result with `isError` marks the step failed and is returned
 unchanged. Pass the name you registered, never a requested resource URI.
