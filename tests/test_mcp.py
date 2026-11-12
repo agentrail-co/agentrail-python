@@ -76,8 +76,8 @@ def test_tool_resource_prompt_steps() -> None:
             assert secret not in repr(spans)
 
 
-# Fails if someone lets an MCP call over HTTP lose the request's entry, or lets
-# the SDK's own per-message server span count as a second entry.
+# Fails if someone breaks the request context on the way to the tool, so an MCP
+# call over HTTP would start its own scope instead of nesting under the request.
 def test_mcp_over_streamable_http_nests_under_the_request() -> None:
     with recording() as rec:
         capture = mcp_capture(rec.client)

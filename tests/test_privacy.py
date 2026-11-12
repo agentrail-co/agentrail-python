@@ -110,7 +110,8 @@ def test_logging_handler_correlates_and_filters() -> None:
                         "o-1",
                         extra={"order_status": "failed", "email": "a@b.test", "event.name": "checkout.failed"},
                     )
-            logger.info("outside")
+            with rec.provider.get_tracer("customer").start_as_current_span("unmanaged work"):
+                logger.info("outside")
         finally:
             logger.handlers.clear()
         milestone = by_name(rec.spans(), "checkout")
