@@ -63,8 +63,10 @@ class _Stream(httpx.SyncByteStream):
     def close(self) -> None:
         try:
             self._stream.close()
-        finally:
-            self._finish(None)
+        except BaseException as error:
+            self._finish(error)
+            raise
+        self._finish(None)
 
 
 class _AsyncStream(httpx.AsyncByteStream):
@@ -90,8 +92,10 @@ class _AsyncStream(httpx.AsyncByteStream):
     async def aclose(self) -> None:
         try:
             await self._stream.aclose()
-        finally:
-            self._finish(None)
+        except BaseException as error:
+            self._finish(error)
+            raise
+        self._finish(None)
 
 
 class AgentrailTransport(httpx.BaseTransport):

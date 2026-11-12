@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Sequence
 
+import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
@@ -115,3 +117,31 @@ def test_shutdown_drains_once() -> None:
         rec.client.shutdown()
         assert [span["name"] for span in rec.collector.spans()] == ["a"]
         assert rec.client.diagnostics().spans.exported == 1
+
+
+# Fails if someone stops restarting delivery in a forked worker (gunicorn
+# --preload), so its records are never sent, or lets the child send records
+# the parent accepted before the fork.
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+@pytest.mark.filterwarnings("ignore:.*fork.*:DeprecationWarning")
+def test_forked_worker_delivers_its_own_records() -> None:
+    step = MilestoneContext(surface="custom", kind="k")
+    with recording() as rec:
+        rec.client.milestone("before-fork", step)
+        pid = os.fork()
+        if pid == 0:
+            code = 1
+            # macOS crashes a forked child that asks the system for proxy
+            # settings, as requests does; the environment answers instead.
+            os.environ["NO_PROXY"] = "*"
+            try:
+                rec.client.milestone("in-child", step)
+                rec.client.flush()
+                stats = rec.client.diagnostics().spans
+                code = 0 if (stats.exported, stats.pending) == (1, 0) else 2
+            finally:
+                os._exit(code)
+        _, status = os.waitpid(pid, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        names = sorted(span["name"] for span in rec.spans())
+        assert names == ["before-fork", "in-child"]

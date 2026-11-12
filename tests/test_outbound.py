@@ -165,3 +165,27 @@ def test_requests_adapter() -> None:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+# Fails if someone records an outgoing call whose response stream failed to
+# close as a success.
+def test_httpx_close_failure_is_recorded() -> None:
+    class FailingClose(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield b"ok"
+
+        def close(self) -> None:
+            raise OSError("connection reset on close")
+
+    class Network(httpx.BaseTransport):
+        def handle_request(self, request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=FailingClose())
+
+    with recording() as rec:
+        client = httpx.Client(transport=transport(rec.client, Network()))
+        with rec.client.start_milestone("sync", STEP):
+            with pytest.raises(OSError, match="connection reset on close"):
+                client.get("https://inventory.example/items")
+        call = by_name(rec.spans(), "HTTP GET")
+        assert call["attributes"]["error.type"] == "TransportError"
+        assert call["status"] == 2

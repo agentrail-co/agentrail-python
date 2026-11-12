@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Sequence
 from typing import cast
 
+import requests
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
@@ -133,8 +135,11 @@ class _Sampler(Sampler):
         result = self._base.should_sample(parent_context, trace_id, name, kind, attributes, links, trace_state)
         ctx = otel_context.get_current() if parent_context is None else parent_context
         if result.decision == Decision.DROP and not suppressed() and self._runtime.state(ctx) is not None:
-            attributes_out = cast(Attributes, result.attributes)  # pyright: ignore[reportUnknownMemberType]
-            return SamplingResult(Decision.RECORD_ONLY, attributes_out, result.trace_state)
+            # The SDK starts a span with the sampler's attributes only, and a DROP
+            # carries none: keep the ones the span was started with.
+            returned = cast(Attributes, result.attributes)  # pyright: ignore[reportUnknownMemberType]
+            merged = {**(attributes or {}), **(returned or {})}
+            return SamplingResult(Decision.RECORD_ONLY, merged, result.trace_state)
         return result
 
     def get_description(self) -> str:
@@ -197,8 +202,17 @@ class Processors:
         self._runtime = runtime = Runtime(resolved)
         headers = {"Authorization": f"Bearer {options.collector.secret}"}
         timeout = resolved.queue.export_timeout
-        span_exporter = OTLPSpanExporter(endpoint=f"{resolved.endpoint}/v1/traces", headers=headers, timeout=timeout)
-        log_exporter = OTLPLogExporter(endpoint=f"{resolved.endpoint}/v1/logs", headers=headers, timeout=timeout)
+        span_session, log_session = requests.Session(), requests.Session()
+        span_exporter = OTLPSpanExporter(
+            endpoint=f"{resolved.endpoint}/v1/traces", headers=headers, timeout=timeout, session=span_session
+        )
+        log_exporter = OTLPLogExporter(
+            endpoint=f"{resolved.endpoint}/v1/logs", headers=headers, timeout=timeout, session=log_session
+        )
+        # A forked child must not write to a connection the parent still uses:
+        # it drops the pooled connections it inherited and opens its own.
+        if hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child=lambda: (span_session.close(), log_session.close()))
         self.spans: ExportQueue[ReadableSpan] = ExportQueue(
             "traces",
             resolved.queue,

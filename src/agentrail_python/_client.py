@@ -285,8 +285,7 @@ class Client:
         """Admit an incoming request: verify its handoff, then open its entry span."""
         if self._closed or suppressed():
             return None
-        ignore = self._runtime.options.input.ignore_incoming_request
-        if ignore is not None and ignore(request):
+        if self._ignored(request):
             return None
         parent = request.headers.get("traceparent")
         token = request.headers.get(HANDOFF_HEADER)
@@ -322,6 +321,17 @@ class Client:
         if not span.is_recording():
             self._runtime.report("entry_not_recording", "traces")
         return span, trace.set_span_in_context(span, ctx)
+
+    def _ignored(self, request: IncomingRequest) -> bool:
+        """A hook that raises never fails the request: it is reported, and recorded."""
+        hook = self._runtime.options.input.ignore_incoming_request
+        if hook is None:
+            return False
+        try:
+            return bool(hook(request))
+        except Exception:  # noqa: BLE001 - the application's check must never fail its request
+            self._runtime.report("ignore_failed", "context")
+            return False
 
     def _location(self, request: IncomingRequest) -> Attributes:
         hook = self._runtime.options.input.incoming_location

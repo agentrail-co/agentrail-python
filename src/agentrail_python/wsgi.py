@@ -56,26 +56,59 @@ def _request(environ: Mapping[str, Any]) -> IncomingRequest:
 
 
 class _Body:
-    """The response body; the entry span ends when the server closes it."""
+    """The response body; the entry span ends when the server closes it.
 
-    def __init__(self, body: Iterable[bytes], finish: Callable[[BaseException | None], None]) -> None:
+    A streamed body runs after the application returned, so each step of it, and
+    its close, runs in the request's context: its logs, milestones and outgoing
+    calls belong to the request.
+    """
+
+    def __init__(
+        self,
+        body: Iterable[bytes],
+        finish: Callable[[BaseException | None], None],
+        ctx: otel_context.Context,
+    ) -> None:
         self._body = body
         self._finish = finish
+        self._ctx = ctx
 
     def __iter__(self) -> Iterator[bytes]:
+        token = otel_context.attach(self._ctx)
         try:
-            yield from self._body
+            chunks = iter(self._body)
         except BaseException as error:
             self._finish(error)
             raise
+        finally:
+            otel_context.detach(token)
+        while True:
+            token = otel_context.attach(self._ctx)
+            try:
+                chunk = next(chunks)
+            except StopIteration:
+                return
+            except BaseException as error:
+                self._finish(error)
+                raise
+            finally:
+                otel_context.detach(token)
+            yield chunk
 
     def close(self) -> None:
-        try:
-            close = getattr(self._body, "close", None)
-            if callable(close):
-                close()
-        finally:
+        close = getattr(self._body, "close", None)
+        if not callable(close):
             self._finish(None)
+            return
+        token = otel_context.attach(self._ctx)
+        try:
+            close()
+        except BaseException as error:
+            self._finish(error)
+            raise
+        finally:
+            otel_context.detach(token)
+        self._finish(None)
 
 
 class AgentrailWSGIMiddleware:
@@ -116,7 +149,7 @@ class AgentrailWSGIMiddleware:
             raise
         finally:
             otel_context.detach(token)
-        return _Body(body, finish)
+        return _Body(body, finish, ctx)
 
 
 def _end(span: Span, status: list[int], error: BaseException | None) -> None:

@@ -33,6 +33,7 @@ CaptureCode = Literal[
     "handoff_refused",
     "entry_not_recording",
     "location_failed",
+    "ignore_failed",
     "identity_outside_request",
     "invalid_performance",
 ]

@@ -430,13 +430,15 @@ if not internal_secret:
 ar.Options(
     ...,
     ignore_incoming_request=lambda request: hmac.compare_digest(
-        request.headers.get("x-my-internal", ""), internal_secret
+        request.headers.get("x-my-internal", "").encode(), internal_secret.encode()
     ),
 )
 ```
 
 Check the secret is set before starting: if it were empty, every request
-without the header would match and nothing would be recorded. Use the same
+without the header would match and nothing would be recorded. Compare bytes:
+`hmac.compare_digest` raises for text that is not ASCII. A hook that raises is
+reported as `ignore_failed`, and that request is recorded like any other. Use the same
 hook for health checks. If the collector itself runs in this process, exclude
 its ingestion routes here too.
 
@@ -478,6 +480,7 @@ never any customer data:
 | `handoff_refused` | A signed handoff did not verify (or one could not be signed) |
 | `entry_not_recording` | A sampler dropped an entry that should have been recorded |
 | `location_failed` | The location hook raised or returned an invalid location |
+| `ignore_failed` | `ignore_incoming_request` raised; the request was recorded |
 | `identity_outside_request` | `identify` was called outside a request or milestone |
 | `invalid_performance` | Workflow or plugin evidence was invalid and left off |
 

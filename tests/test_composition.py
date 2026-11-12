@@ -36,6 +36,20 @@ def test_dropped_managed_spans_stay_record_only() -> None:
         assert rec.codes() == []
 
 
+# Fails if someone promotes a dropped managed span without the attributes it was
+# started with: an outgoing HTTP call would lose its method and address.
+def test_dropped_http_spans_keep_their_attributes() -> None:
+    with recording(sampler=ALWAYS_OFF) as rec:
+        with rec.client.start_milestone("kept", STEP):
+            tracer = rec.provider.get_tracer("http")
+            with tracer.start_as_current_span(
+                "GET", attributes={"http.request.method": "GET", "url.full": "https://inventory.example/items"}
+            ):
+                pass
+        call = by_name(rec.spans(), "HTTP GET")
+        assert call["attributes"]["url.full"] == "https://inventory.example/items"
+
+
 # Fails if someone lets the customer's propagator continue managed work from an
 # unsigned header or inject into it, or breaks propagation for unmanaged work.
 def test_propagator_delegates_only_for_unmanaged_work() -> None:

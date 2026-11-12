@@ -8,8 +8,10 @@ memory: there is no disk persistence.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -59,7 +61,37 @@ class ExportQueue(Generic[T]):
         self._closed = False
         self._stop_once = threading.Lock()
         self._stopped: threading.Event | None = None
+        self._name = name
         self._worker = threading.Thread(target=self._run, name=f"agentrail-{name}", daemon=True)
+        self._worker.start()
+        # A process that forks after start-up (gunicorn --preload, multiprocessing)
+        # gives the child this queue without its worker thread, and possibly with
+        # a lock held by a thread that no longer exists. The child starts afresh.
+        if hasattr(os, "register_at_fork"):
+            queue = weakref.ref(self)
+
+            def reinitialize() -> None:
+                alive = queue()
+                if alive is not None:
+                    alive._after_fork()  # pyright: ignore[reportPrivateUsage]
+
+            os.register_at_fork(after_in_child=reinitialize)
+
+    def _after_fork(self) -> None:
+        """In a forked child: the parent's records stay the parent's to send."""
+        self._lock = threading.Condition()
+        self._records = deque()
+        self._active = None
+        self._accepted = 0
+        self._exported = 0
+        self._dropped = 0
+        self._pending = 0
+        self._force = 0
+        self._stop_once = threading.Lock()
+        if self._closed:
+            return
+        self._stopped = None
+        self._worker = threading.Thread(target=self._run, name=f"agentrail-{self._name}", daemon=True)
         self._worker.start()
 
     def diagnostics(self) -> QueueStats:

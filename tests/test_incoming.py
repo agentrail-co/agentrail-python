@@ -175,3 +175,65 @@ def test_location_failure_never_fails_the_request(hook: Any) -> None:
 
 def test_key_id_shape() -> None:
     assert len(key_id(HASH_KEY)) == 16
+
+
+# Fails if someone lets an exception from the ignore hook fail the request, or
+# stops recording and reporting that request.
+def test_failing_ignore_hook_never_fails_the_request() -> None:
+    def hook(request: IncomingRequest) -> bool:
+        raise TypeError("comparing a header that is not ASCII")
+
+    with recording(ignore_incoming_request=hook) as rec:
+        assert starlette(rec.client).get("/orders/7").status_code == 200
+        by_name(rec.spans(), "HTTP GET")
+        assert rec.codes() == ["ignore_failed"]
+
+
+WSGI_ENVIRON = {"REQUEST_METHOD": "GET", "PATH_INFO": "/", "wsgi.url_scheme": "http", "HTTP_HOST": "h"}
+
+
+# Fails if someone runs a streamed WSGI body outside its request, so the steps
+# it records start traces of their own.
+def test_wsgi_streamed_body_runs_in_its_request() -> None:
+    with recording() as rec:
+
+        def streaming(environ: Any, start_response: Any) -> Any:
+            start_response("200 OK", [("content-type", "text/plain")])
+
+            def body() -> Any:
+                rec.client.milestone("streamed", MilestoneContext(surface="custom", kind="stream.chunk"))
+                yield b"ok"
+
+            return body()
+
+        response = rec.client.wsgi(streaming)(dict(WSGI_ENVIRON), lambda *args: None)
+        assert list(response) == [b"ok"]
+        response.close()
+        spans = rec.spans()
+        entry, streamed = by_name(spans, "HTTP GET"), by_name(spans, "streamed")
+        assert streamed["trace_id"] == entry["trace_id"]
+        assert streamed["parent_span_id"] == entry["span_id"]
+
+
+# Fails if someone records a WSGI body whose close raised as a success.
+def test_wsgi_close_failure_is_recorded() -> None:
+    with recording() as rec:
+
+        class Body:
+            def __iter__(self) -> Any:
+                return iter([b"ok"])
+
+            def close(self) -> None:
+                raise OSError("cleanup failed")
+
+        def app(environ: Any, start_response: Any) -> Any:
+            start_response("200 OK", [])
+            return Body()
+
+        response = rec.client.wsgi(app)(dict(WSGI_ENVIRON), lambda *args: None)
+        assert list(response) == [b"ok"]
+        with pytest.raises(OSError, match="cleanup failed"):
+            response.close()
+        entry = by_name(rec.spans(), "HTTP GET")
+        assert entry["attributes"]["error.type"] == "OSError"
+        assert entry["status"] == 2
