@@ -73,17 +73,19 @@ exclude-newer = "2026-10-28T00:00:00Z"
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-src = ["src", "tests"]
+src = ["src", "tests", "integration", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "BLE", "SIM", "RUF", "PL", "PT"]
 ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLC0415", "PLW0603"]
 
 [tool.ruff.lint.per-file-ignores]
+"integration/**" = ["BLE001"]
+"scripts/**" = ["BLE001"]
 "tests/**" = ["PLR2004", "BLE001", "PT011", "SIM117", "PT018"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "integration"]
 pythonVersion = "3.10"
 strict = ["src"]
 venvPath = "."
