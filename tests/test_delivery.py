@@ -145,3 +145,34 @@ def test_forked_worker_delivers_its_own_records() -> None:
         assert os.waitstatus_to_exitcode(status) == 0
         names = sorted(span["name"] for span in rec.spans())
         assert names == ["before-fork", "in-child"]
+
+
+# Fails if someone holds the exporters' HTTP sessions from the fork hook, so a
+# shut-down SDK's sessions stay alive for the rest of the process.
+def test_fork_hook_does_not_keep_sessions_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    import gc
+    import weakref
+
+    import requests
+
+    from agentrail_python import _processors
+
+    created: list[weakref.ref[requests.Session]] = []
+
+    class Session(requests.Session):
+        def __init__(self) -> None:
+            super().__init__()
+            created.append(weakref.ref(self))
+
+    monkeypatch.setattr(_processors.requests, "Session", Session)
+    with collector() as state:
+        processors = create_processors(options(state.url))
+        provider = TracerProvider(sampler=processors.sampler(ALWAYS_ON))
+        provider.add_span_processor(processors.span_processor)
+        client = processors.bind(provider)
+        client.shutdown()
+        provider.shutdown()
+        del client, provider, processors
+    gc.collect()
+    assert len(created) == 2
+    assert all(reference() is None for reference in created)

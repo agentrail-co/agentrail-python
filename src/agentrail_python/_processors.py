@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import time
+import weakref
 from collections.abc import Sequence
 from typing import cast
 
@@ -211,8 +212,17 @@ class Processors:
         )
         # A forked child must not write to a connection the parent still uses:
         # it drops the pooled connections it inherited and opens its own.
+        # Weak references: a shut-down SDK's sessions are not kept alive by the hook.
         if hasattr(os, "register_at_fork"):
-            os.register_at_fork(after_in_child=lambda: (span_session.close(), log_session.close()))
+            sessions = (weakref.ref(span_session), weakref.ref(log_session))
+
+            def drop_inherited_connections() -> None:
+                for reference in sessions:
+                    session = reference()
+                    if session is not None:
+                        session.close()
+
+            os.register_at_fork(after_in_child=drop_inherited_connections)
         self.spans: ExportQueue[ReadableSpan] = ExportQueue(
             "traces",
             resolved.queue,

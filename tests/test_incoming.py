@@ -237,3 +237,33 @@ def test_wsgi_close_failure_is_recorded() -> None:
         entry = by_name(rec.spans(), "HTTP GET")
         assert entry["attributes"]["error.type"] == "OSError"
         assert entry["status"] == 2
+
+
+# Fails if someone resets a streamed body's context between chunks, so a span
+# it holds open across them stops being current, or lets what the body sets
+# leak into the server's own context.
+def test_wsgi_streamed_span_stays_current_between_chunks() -> None:
+    from opentelemetry import trace
+
+    with recording() as rec:
+        step = MilestoneContext(surface="custom", kind="stream.chunk")
+
+        def streaming(environ: Any, start_response: Any) -> Any:
+            start_response("200 OK", [])
+
+            def body() -> Any:
+                with rec.client.start_milestone("stream", step):
+                    yield b"a"
+                    rec.client.milestone("inner", step)
+                    yield b"b"
+
+            return body()
+
+        response = rec.client.wsgi(streaming)(dict(WSGI_ENVIRON), lambda *args: None)
+        chunks = iter(response)
+        assert next(chunks) == b"a"
+        assert not trace.get_current_span().is_recording()
+        assert list(chunks) == [b"b"]
+        response.close()
+        spans = rec.spans()
+        assert by_name(spans, "inner")["parent_span_id"] == by_name(spans, "stream")["span_id"]

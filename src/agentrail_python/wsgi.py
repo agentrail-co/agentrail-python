@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Any
@@ -58,56 +59,46 @@ def _request(environ: Mapping[str, Any]) -> IncomingRequest:
 class _Body:
     """The response body; the entry span ends when the server closes it.
 
-    A streamed body runs after the application returned, so each step of it, and
-    its close, runs in the request's context: its logs, milestones and outgoing
-    calls belong to the request.
+    A streamed body runs after the application returned, in the context the
+    application ran in: its logs, milestones and outgoing calls belong to the
+    request, and a span it opens across chunks stays current between them. That
+    context is the body's own, so nothing it sets reaches the server's.
     """
 
     def __init__(
         self,
         body: Iterable[bytes],
         finish: Callable[[BaseException | None], None],
-        ctx: otel_context.Context,
+        run: contextvars.Context,
     ) -> None:
         self._body = body
         self._finish = finish
-        self._ctx = ctx
+        self._run = run
 
     def __iter__(self) -> Iterator[bytes]:
-        token = otel_context.attach(self._ctx)
         try:
-            chunks = iter(self._body)
+            chunks = self._run.run(iter, self._body)
         except BaseException as error:
             self._finish(error)
             raise
-        finally:
-            otel_context.detach(token)
         while True:
-            token = otel_context.attach(self._ctx)
             try:
-                chunk = next(chunks)
+                chunk = self._run.run(next, chunks)
             except StopIteration:
                 return
             except BaseException as error:
                 self._finish(error)
                 raise
-            finally:
-                otel_context.detach(token)
             yield chunk
 
     def close(self) -> None:
         close = getattr(self._body, "close", None)
-        if not callable(close):
-            self._finish(None)
-            return
-        token = otel_context.attach(self._ctx)
-        try:
-            close()
-        except BaseException as error:
-            self._finish(error)
-            raise
-        finally:
-            otel_context.detach(token)
+        if callable(close):
+            try:
+                self._run.run(close)
+            except BaseException as error:
+                self._finish(error)
+                raise
         self._finish(None)
 
 
@@ -141,15 +132,19 @@ class AgentrailWSGIMiddleware:
                 status[:] = [int(code)]
             return start_response(status_line, headers, exc_info) if exc_info else start_response(status_line, headers)
 
+        # The application and its body run in one context of their own, holding
+        # the request: what they set carries from the call to every chunk.
         token = otel_context.attach(ctx)
         try:
-            body = self.app(environ, observed_start)
+            run = contextvars.copy_context()
+        finally:
+            otel_context.detach(token)
+        try:
+            body = run.run(self.app, environ, observed_start)
         except BaseException as error:
             finish(error)
             raise
-        finally:
-            otel_context.detach(token)
-        return _Body(body, finish, ctx)
+        return _Body(body, finish, run)
 
 
 def _end(span: Span, status: list[int], error: BaseException | None) -> None:
