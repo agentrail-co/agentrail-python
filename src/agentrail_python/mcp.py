@@ -50,7 +50,7 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.server.mcpserver import Context
 from mcp.shared.exceptions import MCPError
-from mcp_types import INTERNAL_ERROR, INVALID_PARAMS, PROTOCOL_VERSION_META_KEY
+from mcp_types import CLIENT_INFO_META_KEY, INTERNAL_ERROR, INVALID_PARAMS, PROTOCOL_VERSION_META_KEY
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from opentelemetry import context as otel_context
 from opentelemetry import trace
@@ -181,6 +181,13 @@ def _client_details(ctx: Any, method: str, params: Mapping[str, Any] | None) -> 
             details = cast(Mapping[str, object], info)
             return _text(details.get("name"), 128), _text(details.get("version"), 128)
         return None, None
+    meta = None if params is None else params.get("_meta")
+    if isinstance(meta, Mapping):
+        # What the message itself carried comes first (the 2026-07-28 envelope).
+        carried = cast(Mapping[str, object], meta).get(CLIENT_INFO_META_KEY)
+        if isinstance(carried, Mapping):
+            details = cast(Mapping[str, object], carried)
+            return _text(details.get("name"), 128), _text(details.get("version"), 128)
     info = getattr(getattr(getattr(ctx, "session", None), "client_params", None), "client_info", None)
     return _text(getattr(info, "name", None), 128), _text(getattr(info, "version", None), 128)
 
