@@ -59,7 +59,7 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticSerializationError, to_json
 
 from ._client import MilestoneScope
-from ._options import CapturePayloads, McpPayload, MilestoneContext
+from ._options import CapturePayloads, McpContext, McpPayload, MilestoneContext
 from ._runtime import McpEvidence
 from ._text import bounded, well_formed
 
@@ -255,7 +255,9 @@ class McpCapture:
         evidence.request_bytes = _byte_length(message)
         kind = "tool.call" if method == "tools/call" else bounded(f"mcp.{method}", 256)
         span, context = self._client._start(  # pyright: ignore[reportPrivateUsage]
-            _span_name(method, target), MilestoneContext(surface="mcp", kind=kind), mcp=evidence
+            _span_name(method, target),
+            MilestoneContext(surface="mcp", kind=kind, mcp=McpContext(method=method, name=target)),
+            mcp=evidence,
         )
         token = otel_context.attach(context)
         inside = _transport.set(self._client)
@@ -289,7 +291,7 @@ class McpCapture:
             if method == "tools/call" and _is_error(wire):
                 evidence.is_error = True
                 span.set_status(StatusCode.ERROR)
-                span.set_attribute("error.type", "McpOperationError")
+                span.set_attribute("error.type", "tool_error")
             return result
         finally:
             _transport.reset(inside)
@@ -375,10 +377,10 @@ class McpCapture:
         ) = _fit_payloads(request_text, response_text)
 
     def _scope(
-        self, label: str, method: str, kind: str, arguments: tuple[object, ...]
+        self, label: str, method: str, kind: str, name: str, arguments: tuple[object, ...]
     ) -> tuple[MilestoneScope, McpEvidence | None]:
         """The handler's span, and its evidence when it is the step."""
-        details = MilestoneContext(surface="mcp", kind=kind)
+        details = MilestoneContext(surface="mcp", kind=kind, mcp=McpContext(method=method, name=name))
         evidence = McpEvidence(layer="handler", method=method)
         # Inside this client's transport step the handler is its child, not a second step.
         step = _transport.get() is not self._client
@@ -410,13 +412,14 @@ class McpCapture:
                     evidence.is_error = True
                 span = trace.get_current_span()
                 span.set_status(StatusCode.ERROR)
-                span.set_attribute("error.type", "McpOperationError")
+                # The OpenTelemetry MCP convention's name for a failed tool result.
+                span.set_attribute("error.type", "tool_error")
 
         if inspect.iscoroutinefunction(handler):
 
             @functools.wraps(handler)
             async def run_async(*args: Any, **kwargs: Any) -> Any:
-                scope, evidence = self._scope(label, method, kind, (*args, *kwargs.values()))
+                scope, evidence = self._scope(label, method, kind, name, (*args, *kwargs.values()))
                 async with scope:
                     result = await handler(*args, **kwargs)
                     mark_result(result, evidence)
@@ -426,7 +429,7 @@ class McpCapture:
 
         @functools.wraps(handler)
         def run(*args: Any, **kwargs: Any) -> Any:
-            scope, evidence = self._scope(label, method, kind, (*args, *kwargs.values()))
+            scope, evidence = self._scope(label, method, kind, name, (*args, *kwargs.values()))
             with scope:
                 result = handler(*args, **kwargs)
                 mark_result(result, evidence)

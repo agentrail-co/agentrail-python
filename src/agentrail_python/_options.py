@@ -145,6 +145,8 @@ class McpContext:
     client: str | None = None
     client_version: str | None = None
     protocol: str | None = None
+    # The tool, resource or prompt's registered name, never a value from its arguments.
+    name: str | None = None
 
 
 class McpPayload(TypedDict):

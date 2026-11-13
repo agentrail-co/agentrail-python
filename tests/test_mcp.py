@@ -212,6 +212,8 @@ def test_one_step_per_message_and_no_content_by_default() -> None:
                 "agentrail.step.surface": "mcp",
                 "agentrail.step.kind": "tool.call",
                 MCP["method"]: "tools/call",
+                MCP["methodName"]: "tools/call",
+                MCP["toolName"]: "checkout",
                 MCP["clientName"]: "mcp",
                 MCP["protocolVersion"]: "2026-07-28",
             }.items()
@@ -219,7 +221,10 @@ def test_one_step_per_message_and_no_content_by_default() -> None:
         assert tool["attributes"][MCP["requestBytes"]] > 0 and tool["attributes"][MCP["responseBytes"]] > 0
         handler = [span for span in spans if span["parent_span_id"] == tool["span_id"]]
         assert len(handler) == 1 and handler[0]["name"] == "mcp.tools/call:checkout"
-        assert handler[0]["attributes"] == fixture_spans("sdk-mcp-transport-with-handler")[1]["attributes"]
+        assert handler[0]["attributes"] == {
+            **fixture_spans("sdk-mcp-transport-with-handler")[1]["attributes"],
+            MCP["toolName"]: "checkout",
+        }
 
         failed = fixture_spans("sdk-mcp-tool-error-with-payload")[0]
         refund = transport(spans, "mcp.tools/call:refund")
@@ -231,6 +236,15 @@ def test_one_step_per_message_and_no_content_by_default() -> None:
         )
         assert by_name(spans, "mcp.resources/read:catalog")["attributes"][MCP["layer"]] == "handler"
         assert transport(spans, "mcp.prompts/get:greet")["attributes"]["agentrail.step.kind"] == "mcp.prompts/get"
+        # Fails if standard MCP names are lost on either layer, or resource URIs leak into them.
+        for span in spans:
+            attrs = span["attributes"]
+            if attrs.get(MCP["method"]) == "prompts/get":
+                assert attrs[MCP["methodName"]] == "prompts/get"
+                assert attrs[MCP["promptName"]] == "greet"
+            if attrs.get(MCP["method"]) == "resources/read":
+                assert attrs[MCP["methodName"]] == "resources/read"
+                assert not {MCP["toolName"], MCP["promptName"], "mcp.resource.uri"} & attrs.keys()
         assert_named(spans)
         for span in spans:
             assert not {MCP["requestPayload"], MCP["responsePayload"]} & span["attributes"].keys()
@@ -304,7 +318,10 @@ def test_json_rpc_errors_keep_their_code() -> None:
             assert span["attributes"][MCP["responseBytes"]] == len(compact(answer).encode())
             assert span["status"] == wanted["status"]
             assert span["attributes"]["error.type"] == wanted["attributes"]["error.type"]
-        assert transport(spans, "mcp.tools/call")["attributes"].keys() == wanted["attributes"].keys()
+        # Invalid params name no tool, unlike the fixture's unknown named tool.
+        assert transport(spans, "mcp.tools/call")["attributes"].keys() == wanted["attributes"].keys() - {
+            MCP["toolName"]
+        }
         assert_named(spans)
 
 
@@ -421,6 +438,8 @@ def test_handler_step_keeps_the_session_hash() -> None:
             tool["attributes"].items()
             >= {
                 MCP["clientName"]: "synthetic-client",
+                MCP["methodName"]: "tools/call",
+                MCP["toolName"]: "whoami",
                 MCP["clientVersion"]: "1.0.0",
                 MCP["protocolVersion"]: "2025-06-18",
             }.items()

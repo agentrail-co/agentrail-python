@@ -141,6 +141,14 @@ def copy_span(span: ReadableSpan, meta: SpanMeta, runtime: Runtime) -> ReadableS
             attributes.update(mark.performance)
         mcp = mark.details.mcp
         if mcp is not None:
+            # Resource URIs have no standard name attribute.
+            for key, value, limit in (
+                ("mcp.method.name", mcp.method, 128),
+                ("gen_ai.tool.name", mcp.name if mcp.method == "tools/call" else None, 256),
+                ("gen_ai.prompt.name", mcp.name if mcp.method == "prompts/get" else None, 256),
+            ):
+                if value:
+                    attributes[key] = bounded(value, limit)
             _client_details(attributes, mcp.client, mcp.client_version, mcp.protocol)
         if mark.mcp is not None:
             _mcp_attributes(attributes, mark.mcp)

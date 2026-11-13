@@ -3047,6 +3047,18 @@
                             }
                           },
                           {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
                             "key": "agentrail.mcp.session.id_hash",
                             "value": {
                               "stringValue": "dddddddddddddddddddddddddddddddd"
@@ -3103,6 +3115,18 @@
                             "key": "agentrail.mcp.method",
                             "value": {
                               "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
                             }
                           }
                         ]
@@ -3224,6 +3248,18 @@
                             "key": "agentrail.mcp.method",
                             "value": {
                               "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
                             }
                           },
                           {
@@ -3382,6 +3418,18 @@
                             }
                           },
                           {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
                             "key": "agentrail.mcp.session.id_hash",
                             "value": {
                               "stringValue": "dddddddddddddddddddddddddddddddd"
@@ -3426,7 +3474,7 @@
                           {
                             "key": "error.type",
                             "value": {
-                              "stringValue": "McpOperationError"
+                              "stringValue": "tool_error"
                             }
                           },
                           {
@@ -3670,6 +3718,18 @@
                             }
                           },
                           {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
                             "key": "agentrail.mcp.session.id_hash",
                             "value": {
                               "stringValue": "dddddddddddddddddddddddddddddddd"
@@ -3781,6 +3841,18 @@
                             "key": "agentrail.mcp.method",
                             "value": {
                               "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
                             }
                           },
                           {
@@ -3926,6 +3998,10 @@
       "responsePayload": "agentrail.mcp.response.payload",
       "requestTruncated": "agentrail.mcp.request.truncated",
       "responseTruncated": "agentrail.mcp.response.truncated",
+      "methodName": "mcp.method.name",
+      "rpcMethod": "rpc.method",
+      "toolName": "gen_ai.tool.name",
+      "promptName": "gen_ai.prompt.name",
       "clientName": "agentrail.mcp.client.name",
       "clientVersion": "agentrail.mcp.client.version",
       "protocolVersion": "agentrail.mcp.protocol.version"
@@ -3933,7 +4009,8 @@
     "mcpSpans": {
       "name": "Transport span: mcp.<method>, or mcp.<method>:<name> for tools/call, resources/read and prompts/get (the tool, the requested resource URI without its userinfo, query or fragment, the prompt), at most 256 UTF-16 units; with no name, mcp.<method> and no colon. Handler span: mcp.<method>:<the name the tool, resource or prompt was registered under>.",
       "transport": "One span per JSON-RPC message the server received, set as a step (agentrail.step true, agentrail.step.surface mcp, agentrail.step.kind tool.call for tools/call and mcp.<method> otherwise), with layer transport. protocol.version is what that message carried (its _meta, the mcp-protocol-version header, or for initialize its params), never a negotiated value; client.name and client.version are the message's own _meta clientInfo where it carries one, else what the client declared in its initialize. ERROR status for a JSON-RPC error answer, whatever raised it (jsonrpc.error_code set to the code on the wire when it is a 32-bit integer, -2147483648 to 2147483647, and omitted otherwise: the collector refuses an export carrying one outside that range), a tool result with isError (result.is_error true), or a request the transport refused with an HTTP status of 400 or more and no JSON-RPC answer.",
-      "errorTypes": "error.type on an ERROR span: McpJsonRpcError for a JSON-RPC error answer, McpOperationError for a tool result with isError, McpTransportRejected for a request refused with no JSON-RPC answer, otherwise the thrown error's own type name.",
+      "errorTypes": "error.type on an ERROR span: McpJsonRpcError for a JSON-RPC error answer, tool_error for a tool result with isError (older SDKs used McpOperationError or mcp.toolResultError, which remain supported), McpTransportRejected for a request refused with no JSON-RPC answer, otherwise the thrown error's own type name.",
+      "standardNames": "mcp.method.name on transport and handler spans; gen_ai.tool.name for tools/call and gen_ai.prompt.name for prompts/get, using the requested name on transport spans and the registered name on handler spans, bounded to 256 UTF-16 units. Resources have no name attribute: mcp.resource.uri is omitted.",
       "handler": "A tool, resource or prompt callback inside a transport span: its child, layer handler, and no step (no agentrail.step). Alone, as an SDK without the transport wrapper sends it, it is the step itself and carries what a transport span would where the callback can see it: client name, version and protocol, session.id_hash, and result.is_error for a tools/call result with isError.",
       "sizes": "request.bytes and response.bytes are the UTF-8 length of the JSON-RPC message as the SDK encodes it, without whitespace.",
       "session": "session.id_hash is the keyed hash (the resource hash key, as principal ids are hashed) of the Mcp-Session-Id the server issued, never an id only a request carried; absent where the server issued none (stateless HTTP, stdio, the 2026-07-28 protocol). It needs agentrail.hash_key_id on the resource.",
