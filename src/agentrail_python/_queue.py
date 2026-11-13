@@ -301,3 +301,5 @@ class ExportQueue(Generic[T]):
                     self._lock.notify_all()
                 if reported and not succeeded:
                     self._report("export_failed", count)
+                # Delivered records, payloads included, are not kept alive while idle.
+                del values, batch

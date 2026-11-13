@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import threading
 import time
+import weakref
 from collections.abc import Sequence
 from typing import Generic, TypeVar
 
@@ -115,6 +117,24 @@ def test_payload_budget_includes_the_batch_in_flight() -> None:
     q.flush()
     assert [list(batch) for batch in gate.batches] == [[("a", 60)], [("b", 0)], [("c", 60)]]
     assert codes == [("payload_budget", 1)]
+
+
+# Fails if the idle worker keeps the last exported batch alive (up to a
+# batch of payload text held while nothing is sent).
+def test_exported_batch_is_released() -> None:
+    class Record:
+        pass
+
+    settings = QueueOptions(max_records=10, batch_size=5, scheduled_delay=3600, export_timeout=1, flush_timeout=1)
+    q: ExportQueue[Record] = ExportQueue("test", settings, lambda batch: True, lambda code, count: None, lambda: None)
+    record = Record()
+    alive = weakref.ref(record)
+    q.add(record)
+    q.flush()
+    del record
+    gc.collect()
+    assert alive() is None
+    q.shutdown()
 
 
 # Fails if someone lets flush wait past its deadline, or forgets to count and
