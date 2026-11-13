@@ -6,6 +6,7 @@ from __future__ import annotations
 import threading
 import uuid
 from dataclasses import dataclass, field
+from typing import Literal
 
 from opentelemetry import context as otel_context
 from opentelemetry.sdk.resources import Resource
@@ -44,12 +45,39 @@ class RequestState:
             return self._identity != identity
 
 
+@dataclass
+class McpEvidence:
+    """What an MCP span records, filled in while its message is handled.
+
+    It lives in the span's mark, never on the customer's span: the payloads
+    reach only Agentrail's sanitized copy.
+    """
+
+    layer: Literal["transport", "handler"]
+    method: str | None
+    client: str | None = None
+    client_version: str | None = None
+    protocol: str | None = None
+    session_hash: str | None = None
+    request_bytes: int | None = None
+    response_bytes: int | None = None
+    error_code: int | None = None
+    is_error: bool = False
+    request_payload: str | None = None
+    response_payload: str | None = None
+    request_truncated: bool = False
+    response_truncated: bool = False
+
+
 @dataclass(frozen=True)
 class Mark:
     name: str
     details: MilestoneContext
     performance: Attributes | None = None
     identity: Attributes | None = None
+    step: bool = True
+    """False for an MCP handler inside a transport step: a child span, never a second step."""
+    mcp: McpEvidence | None = None
 
 
 @dataclass(frozen=True)

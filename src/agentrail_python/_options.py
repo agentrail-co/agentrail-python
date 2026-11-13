@@ -8,7 +8,7 @@ import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from urllib.parse import SplitResult, urlsplit
 
 from ._text import valid_text, well_formed
@@ -36,6 +36,8 @@ CaptureCode = Literal[
     "ignore_failed",
     "identity_outside_request",
     "invalid_performance",
+    "redact_failed",
+    "payload_budget",
 ]
 Signal = Literal["traces", "logs", "context"]
 
@@ -143,6 +145,35 @@ class McpContext:
     client: str | None = None
     client_version: str | None = None
     protocol: str | None = None
+
+
+class McpPayload(TypedDict):
+    """What a redact hook sees of one MCP message: copies, never the live objects.
+
+    ``name`` is the tool, the resource URI or the prompt, else ``None``.
+    ``request`` is the message's params; ``response`` is the result, the
+    JSON-RPC error (``code``, ``message``, ``data``), or ``None`` for a
+    notification or a failure the SDK maps to an error itself.
+    """
+
+    method: str
+    name: str | None
+    request: Any
+    response: Any
+
+
+@dataclass(frozen=True, kw_only=True)
+class CapturePayloads:
+    """Opt in to sending MCP request and response content.
+
+    ``redact`` runs in the request, after the server answered, on copies.
+    Return the mapping to send (its ``request`` and ``response`` are encoded
+    as JSON text; a missing or ``None`` side is not sent), or ``None`` to send
+    neither. A hook that raises sends nothing for that message and is
+    reported as ``redact_failed``; the MCP call is unaffected.
+    """
+
+    redact: Callable[[McpPayload], Mapping[str, Any] | None]
 
 
 @dataclass(frozen=True, kw_only=True)

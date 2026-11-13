@@ -8,8 +8,9 @@
 `agentrail-python` adds your Python servers to the journeys
 [Agentrail](https://www.agentrail.co) follows: the requests they answer, the
 calls they make, the identity your application verified, the milestones you
-name, your logs and your MCP tool calls. Bodies, arguments, results and raw
-identities never leave your process.
+name, your logs and your MCP traffic. Bodies and raw identities never leave
+your process; MCP arguments and results leave it only when you turn on
+`capture_payloads`.
 
 Works with FastAPI, Starlette, Django, Flask and any ASGI or WSGI application.
 Requires **Python 3.10 or later**.
@@ -82,6 +83,42 @@ application = agentrail.asgi(get_asgi_application())  # Django (ASGI), Starlette
 application = agentrail.wsgi(get_wsgi_application())  # Django (WSGI)
 app.wsgi_app = agentrail.wsgi(app.wsgi_app)            # Flask, any WSGI app
 ```
+
+### MCP
+
+With the official `mcp` SDK, add the middleware first. Each JSON-RPC message
+your server receives becomes a step: its method, outcome and JSON-RPC error
+code, message sizes, the calling client and, on stateful streamable HTTP, a
+keyed hash of the session ID (the opening `initialize` included). Wrapped
+tools, resources and prompts are child spans of that step.
+
+```python
+from mcp.server.mcpserver import MCPServer
+from agentrail_python.mcp import mcp_capture
+
+capture = mcp_capture(agentrail)
+server = MCPServer("orders", middleware=[capture.middleware])  # first in the list
+server.tool(name="checkout")(capture.tool("checkout", checkout))
+
+# Streamable HTTP: wrap the app so each MCP step sits under its HTTP request.
+app = agentrail.asgi(server.streamable_http_app())
+```
+
+Arguments and results are off by default. To send them, pass a redact hook; it
+gets copies of `method`, `name`, `request` and `response` and returns what to
+send, or `None` to send nothing:
+
+```python
+def redact(payload: ar.McpPayload):
+    request = dict(payload["request"] or {})
+    request.pop("arguments", None)
+    return {"request": request, "response": payload["response"]}
+
+
+capture = mcp_capture(agentrail, capture_payloads=ar.CapturePayloads(redact=redact))
+```
+
+A payload is truncated, and flagged, only when it alone cannot fit one export.
 
 Agentrail never fails your request: anything it could not capture or send goes
 to your `on_error` callback.

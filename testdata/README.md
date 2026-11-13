@@ -3,8 +3,13 @@
 Copied, never edited here. Update them where they are made and copy them again.
 
 - `sdk-contract.json` is copied byte for byte from Argus
-  `apps/api/sdk-contract.json` at revision `2074d586322c0d6097a840b392aa75e846f9eeb8` (identical to the
-  copy in agentrail-go). It is written by Argus's `apps/api/test/sdk-contract.test.ts`.
+  `apps/api/sdk-contract.json` as generated on branch `feat/mcp-analytics`
+  from base `23eaa10c2e85a5b86648468bc5e28e304394c19e`, before that change was
+  committed (SHA-256
+  `f8634c0c80a06de3b16f2568c9ec61093ff0fffcadbcb2f815ad8f7ae6e4e090`). It adds
+  `otlp.mcpAttributes`, `otlp.mcpSpans` and the `sdk-mcp-*` fixtures. It is
+  written by Argus's `apps/api/test/sdk-contract.test.ts`. Copy it again from
+  the commit that lands it.
 - `interoperability/contract.json`, `javascript.json` and `markers.json` are
   copied from agentrail-go `testdata/interoperability/` at `ad62f2b34c71143de38388236cff431013d1227e`. Its
   `generate.mjs` writes them with `node:crypto`, native `JSON.stringify` and
