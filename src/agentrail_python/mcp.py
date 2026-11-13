@@ -66,6 +66,7 @@ F = TypeVar("F", bound=Callable[..., Any])
 # What the collector accepts as a method; another is named in the span only.
 _METHOD = re.compile(r"[A-Za-z0-9_./-]{1,128}")
 _TARGETS = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
+_INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
 _PAYLOAD_BYTES = 14 * 1024 * 1024
 """One span's two payloads together: the contract's ``otlp.limits.mcpPayloadBytes``."""
 
@@ -281,7 +282,8 @@ class McpCapture:
     def _json_rpc_error(
         self, span: Span, evidence: McpEvidence, request_id: object, error: dict[str, Any], code: int
     ) -> None:
-        evidence.error_code = code
+        # The collector stores a 32-bit code and refuses the export past it: leave such a code out.
+        evidence.error_code = code if _INT32_MIN <= code <= _INT32_MAX else None
         if request_id is not None:
             evidence.response_bytes = _byte_length({"jsonrpc": "2.0", "id": request_id, "error": error})
         span.set_status(StatusCode.ERROR)

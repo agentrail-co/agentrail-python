@@ -6,7 +6,7 @@ Copied, never edited here. Update them where they are made and copy them again.
   `apps/api/sdk-contract.json` as generated on branch `feat/mcp-analytics`
   from base `23eaa10c2e85a5b86648468bc5e28e304394c19e`, before that change was
   committed (SHA-256
-  `3bd2c8048b01bafbc1d08dc41a49646b481c71f8bacbaad3a866c070d323f4ef`). It adds
+  `b0466ae7915307279d0c8655a2c6931c1320fecadae169d2135a4655d763038e`). It adds
   `otlp.mcpAttributes`, `otlp.mcpSpans`, `otlp.limits.mcpPayloadBytes` and
   `exportBatchBytes`, and the `sdk-mcp-*` fixtures. It is
   written by Argus's `apps/api/test/sdk-contract.test.ts`. Copy it again from

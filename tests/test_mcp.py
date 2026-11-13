@@ -17,6 +17,7 @@ import httpx2
 import pytest
 from mcp.client.client import Client as McpClient
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS, METHOD_NOT_FOUND, CallToolResult, TextContent
 
 from agentrail_python import CapturePayloads, McpPayload
@@ -66,6 +67,8 @@ async def refuse_listing(ctx: Any, call_next: Any) -> Any:
     """An application middleware after Agentrail's that raises an ordinary exception."""
     if ctx.method == "prompts/list":
         raise PermissionError("synthetic refusal")
+    if ctx.method == "synthetic/huge-code":
+        raise MCPError(code=2**31, message="synthetic code past int32")
     return await call_next(ctx)
 
 
@@ -405,6 +408,19 @@ def test_ordinary_exception_is_a_json_rpc_error() -> None:
         assert span["attributes"][MCP["errorCode"]] == answers[1]["error"]["code"] == 0
         assert span["attributes"]["error.type"] == wanted and span["status"] == 2
         assert span["attributes"][MCP["responseBytes"]] == len(compact(answers[1]).encode())
+
+
+# Fails if someone sends an error code past 32 bits, which the collector
+# refuses with the whole export, instead of leaving it out.
+def test_error_code_past_int32_is_left_out() -> None:
+    huge = {"jsonrpc": "2.0", "id": 2, "method": "synthetic/huge-code"}
+    with recording() as rec:
+        _, answers = stateful_session(rec, [huge])
+        assert answers[1]["error"]["code"] == 2**31
+        span = transport(rec.spans(), "mcp.synthetic/huge-code")
+        assert MCP["errorCode"] not in span["attributes"]
+        assert span["status"] == 2
+        assert span["attributes"]["error.type"] == fixture_spans("sdk-mcp-jsonrpc-error")[0]["attributes"]["error.type"]
 
 
 # Fails if someone records the negotiated protocol version instead of the one
