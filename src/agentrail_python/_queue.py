@@ -297,9 +297,10 @@ class ExportQueue(Generic[T]):
                             self._exported += count
                         else:
                             self._dropped += count
+                    # Released before flush() can wake: once it returns, delivered
+                    # records, payloads included, are no longer held here.
+                    del values, batch
                     self._active = None
                     self._lock.notify_all()
                 if reported and not succeeded:
                     self._report("export_failed", count)
-                # Delivered records, payloads included, are not kept alive while idle.
-                del values, batch
