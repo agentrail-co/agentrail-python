@@ -238,8 +238,9 @@ def test_stateful_http_session_and_sizes() -> None:
 
 
 # Fails if someone loses the JSON-RPC error code (METHOD_NOT_FOUND, or params
-# validation), sends a method outside the collector's pattern, swallows or rewrites the error the client receives, or marks it
-# other than the contract's fixture does.
+# validation), sends a method outside the collector's pattern, swallows or
+# rewrites the error the client receives, or marks it other than the
+# contract's fixture does.
 def test_json_rpc_errors_keep_their_code() -> None:
     unknown = {"jsonrpc": "2.0", "id": 2, "method": "no/such"}
     invalid = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {}}
