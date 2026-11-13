@@ -69,9 +69,17 @@ def test_tool_resource_prompt_steps() -> None:
         assert "agentrail.mcp.client.version" in tool["attributes"]
         refund = by_name(spans, "mcp.tools/call:refund")
         assert refund["status"] == 2
-        assert refund["attributes"]["error.type"] == "McpOperationError"
+        assert refund["attributes"]["error.type"] == "tool_error"
         assert by_name(spans, "mcp.resources/read:catalog")["attributes"]["agentrail.step.kind"] == "mcp.resources/read"
         assert by_name(spans, "mcp.prompts/get:greet")["attributes"]["agentrail.step.kind"] == "mcp.prompts/get"
+        # Fails if someone drops the OpenTelemetry MCP names, or names a resource
+        # by its URI, which can carry what was asked for.
+        assert tool["attributes"]["mcp.method.name"] == "tools/call"
+        assert tool["attributes"]["gen_ai.tool.name"] == "checkout"
+        assert by_name(spans, "mcp.prompts/get:greet")["attributes"]["gen_ai.prompt.name"] == "greet"
+        resource = by_name(spans, "mcp.resources/read:catalog")["attributes"]
+        assert resource["mcp.method.name"] == "resources/read"
+        assert not {"gen_ai.tool.name", "gen_ai.prompt.name", "mcp.resource.uri"} & resource.keys()
         for secret in ("secret-item", "secret-sku", "secret-name", "private catalog", "private prompt", "o-1"):
             assert secret not in repr(spans)
 

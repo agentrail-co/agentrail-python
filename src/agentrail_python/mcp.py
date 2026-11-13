@@ -82,12 +82,12 @@ class McpCapture:
         """Wrap a prompt function."""
         return self._wrap("prompts/get", "mcp.prompts/get", name, handler)
 
-    def _details(self, method: str, kind: str) -> MilestoneContext:
+    def _details(self, method: str, kind: str, name: str) -> MilestoneContext:
         client, version, protocol = _request.get() or (None, None, None)
         return MilestoneContext(
             surface="mcp",
             kind=kind,
-            mcp=McpContext(method=method, client=client, client_version=version, protocol=protocol),
+            mcp=McpContext(method=method, client=client, client_version=version, protocol=protocol, name=name),
         )
 
     def _wrap(self, method: str, kind: str, name: str, handler: F) -> F:
@@ -98,13 +98,14 @@ class McpCapture:
             if _is_error(result):
                 span = trace.get_current_span()
                 span.set_status(StatusCode.ERROR)
-                span.set_attribute("error.type", "McpOperationError")
+                # The OpenTelemetry MCP convention's name for a tool result with isError.
+                span.set_attribute("error.type", "tool_error")
 
         if inspect.iscoroutinefunction(handler):
 
             @functools.wraps(handler)
             async def run_async(*args: Any, **kwargs: Any) -> Any:
-                async with client.start_milestone(label, self._details(method, kind)):
+                async with client.start_milestone(label, self._details(method, kind, name)):
                     result = await handler(*args, **kwargs)
                     mark_result(result)
                     return result
@@ -113,7 +114,7 @@ class McpCapture:
 
         @functools.wraps(handler)
         def run(*args: Any, **kwargs: Any) -> Any:
-            with client.start_milestone(label, self._details(method, kind)):
+            with client.start_milestone(label, self._details(method, kind, name)):
                 result = handler(*args, **kwargs)
                 mark_result(result)
                 return result

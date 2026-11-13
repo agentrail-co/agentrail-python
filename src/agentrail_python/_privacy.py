@@ -134,7 +134,12 @@ def copy_span(span: ReadableSpan, meta: SpanMeta, runtime: Runtime) -> ReadableS
             attributes.update(mark.performance)
         mcp = mark.details.mcp
         if mcp is not None:
+            # The OpenTelemetry MCP server span's names. A resource is named only
+            # by its URI there, which can carry what was asked for, so it gets none.
             for key, value, limit in (
+                ("mcp.method.name", mcp.method, 128),
+                ("gen_ai.tool.name", mcp.name if mcp.method == "tools/call" else None, 256),
+                ("gen_ai.prompt.name", mcp.name if mcp.method == "prompts/get" else None, 256),
                 ("agentrail.mcp.client.name", mcp.client, 128),
                 ("agentrail.mcp.client.version", mcp.client_version, 128),
                 ("agentrail.mcp.protocol.version", mcp.protocol, 64),
