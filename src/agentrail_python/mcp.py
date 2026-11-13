@@ -23,7 +23,14 @@ come from the client and are descriptive only: they never assert an identity.
 The session hash is the keyed hash of the ``Mcp-Session-Id`` the server
 issued, on every message of a stateful streamable HTTP session, the opening
 ``initialize`` included. stdio, stateless HTTP and the 2026-07-28 protocol
-have no session, and send none.
+have no session, and send none. The protocol version is the one the message
+carried (its ``_meta``, the ``mcp-protocol-version`` header, or the
+``initialize`` params), never the negotiated one.
+
+A request the MCP SDK refuses before its middleware runs (a malformed body,
+a wrong ``Accept`` or protocol header, an unknown session) reaches no
+middleware, so it is no step here; with the ASGI wrapper it is still recorded
+as its HTTP request.
 """
 
 from __future__ import annotations
@@ -39,7 +46,8 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.server.mcpserver import Context
 from mcp.shared.exceptions import MCPError
-from mcp_types import INVALID_PARAMS
+from mcp_types import INTERNAL_ERROR, INVALID_PARAMS, PROTOCOL_VERSION_META_KEY
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import Span, StatusCode
@@ -47,7 +55,6 @@ from pydantic import BaseModel, ValidationError
 
 from ._client import MilestoneScope
 from ._options import CapturePayloads, McpPayload, MilestoneContext
-from ._queue import BATCH_BYTES
 from ._runtime import McpEvidence
 from ._text import bounded, well_formed
 
@@ -59,8 +66,8 @@ F = TypeVar("F", bound=Callable[..., Any])
 # What the collector accepts as a method; another is named in the span only.
 _METHOD = re.compile(r"[A-Za-z0-9_./-]{1,128}")
 _TARGETS = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
-# One record's payloads, with room for the rest of the span within one export.
-_PAYLOAD_BYTES = BATCH_BYTES - 128 * 1024
+_PAYLOAD_BYTES = 14 * 1024 * 1024
+"""One span's two payloads together: the contract's ``otlp.limits.mcpPayloadBytes``."""
 
 _transport: contextvars.ContextVar[object | None] = contextvars.ContextVar(
     "agentrail_python_mcp_transport", default=None
@@ -150,6 +157,29 @@ def _client_details(ctx: Any, method: str, params: Mapping[str, Any] | None) -> 
     return _text(getattr(info, "name", None), 128), _text(getattr(info, "version", None), 128)
 
 
+def _carried_protocol(ctx: Any, method: str, params: Mapping[str, Any] | None) -> str | None:
+    """The protocol version the message itself carried, never the negotiated one."""
+    if method == "initialize":
+        return _text(None if params is None else params.get("protocolVersion"), 64)
+    meta = None if params is None else params.get("_meta")
+    if isinstance(meta, Mapping):
+        carried = _text(cast(Mapping[str, object], meta).get(PROTOCOL_VERSION_META_KEY), 64)
+        if carried:
+            return carried
+    headers = getattr(getattr(ctx, "request", None), "headers", None)
+    if not isinstance(headers, Mapping):
+        return None
+    return _text(cast(Mapping[str, object], headers).get("mcp-protocol-version"), 64)
+
+
+def _answered_error(ctx: Any, error: Exception) -> dict[str, Any]:
+    """The JSON-RPC error the SDK answers an ordinary exception with, as its dispatchers do."""
+    if getattr(ctx, "protocol_version", None) in MODERN_PROTOCOL_VERSIONS:
+        return {"code": INTERNAL_ERROR, "message": "Internal server error"}
+    # Handshake-era connections answer with code 0 and the exception's text.
+    return {"code": 0, "message": str(error)}
+
+
 class McpCapture:
     def __init__(self, client: Client, *, capture_payloads: CapturePayloads | None = None) -> None:
         self._client = client
@@ -175,7 +205,7 @@ class McpCapture:
             method=method if _METHOD.fullmatch(method) else None,
             client=client_name,
             client_version=client_version,
-            protocol=_text(getattr(ctx, "protocol_version", None), 64),
+            protocol=_carried_protocol(ctx, method, params),
             session_hash=self._session_hash(getattr(ctx, "session", None)),
         )
         message: dict[str, Any] = {"jsonrpc": "2.0"}
@@ -204,9 +234,15 @@ class McpCapture:
                 response = {"code": INVALID_PARAMS, "message": "Invalid request parameters", "data": ""}
                 self._json_rpc_error(span, evidence, request_id, response, INVALID_PARAMS)
                 raise
+            except Exception as error:
+                if request_id is None:  # a notification: nothing answers it
+                    self._failed(span, error)
+                    raise
+                response = _answered_error(ctx, error)
+                self._json_rpc_error(span, evidence, request_id, response, response["code"])
+                raise
             except BaseException as error:
-                span.set_status(StatusCode.ERROR)
-                span.set_attribute("error.type", bounded(type(error).__qualname__, 4096))
+                self._failed(span, error)
                 raise
             wire = _wire(result)
             if request_id is not None:
@@ -216,9 +252,6 @@ class McpCapture:
                 evidence.is_error = True
                 span.set_status(StatusCode.ERROR)
                 span.set_attribute("error.type", "McpOperationError")
-            if method == "initialize" and isinstance(wire, Mapping):
-                negotiated = _text(cast(Mapping[str, object], wire).get("protocolVersion"), 64)
-                evidence.protocol = negotiated or evidence.protocol
             return result
         finally:
             _transport.reset(inside)
@@ -240,6 +273,10 @@ class McpCapture:
     def prompt(self, name: str, handler: F) -> F:
         """Wrap a prompt function."""
         return self._wrap("prompts/get", "mcp.prompts/get", name, handler)
+
+    def _failed(self, span: Span, error: BaseException) -> None:
+        span.set_status(StatusCode.ERROR)
+        span.set_attribute("error.type", bounded(type(error).__qualname__, 4096))
 
     def _json_rpc_error(
         self, span: Span, evidence: McpEvidence, request_id: object, error: dict[str, Any], code: int
@@ -293,31 +330,40 @@ class McpCapture:
             evidence.response_truncated,
         ) = _fit_payloads(request_text, response_text)
 
-    def _scope(self, label: str, method: str, kind: str, arguments: tuple[object, ...]) -> MilestoneScope:
+    def _scope(
+        self, label: str, method: str, kind: str, arguments: tuple[object, ...]
+    ) -> tuple[MilestoneScope, McpEvidence | None]:
+        """The handler's span, and its evidence when it is the step."""
         details = MilestoneContext(surface="mcp", kind=kind)
         evidence = McpEvidence(layer="handler", method=method)
         # Inside this client's transport step the handler is its child, not a second step.
         step = _transport.get() is not self._client
         if step:
-            evidence.session_hash = self._handler_session(arguments)
-        return MilestoneScope(self._client, label, details, step=step, mcp=evidence)
+            self._handler_details(evidence, arguments)
+        return MilestoneScope(self._client, label, details, step=step, mcp=evidence), evidence if step else None
 
-    def _handler_session(self, arguments: tuple[object, ...]) -> str | None:
-        """The session hash, when the function receives the MCPServer ``Context``."""
+    def _handler_details(self, evidence: McpEvidence, arguments: tuple[object, ...]) -> None:
+        """As the step, what a transport span would carry, when the function receives
+        the MCPServer ``Context``: client details, protocol version and session."""
         for value in arguments:
             if isinstance(value, Context):
                 try:
-                    session = cast(Context[Any, Any], value).session
+                    request = cast(Context[Any, Any], value).request_context
                 except ValueError:  # a Context built outside a request
-                    return None
-                return self._session_hash(session)
-        return None
+                    return
+                params = request.params
+                evidence.client, evidence.client_version = _client_details(request, request.method, params)
+                evidence.protocol = _carried_protocol(request, request.method, params)
+                evidence.session_hash = self._session_hash(request.session)
+                return
 
     def _wrap(self, method: str, kind: str, name: str, handler: F) -> F:
         label = _span_name(method, name)
 
-        def mark_result(result: object) -> None:
+        def mark_result(result: object, evidence: McpEvidence | None) -> None:
             if _is_error(result):
+                if evidence is not None and method == "tools/call":
+                    evidence.is_error = True
                 span = trace.get_current_span()
                 span.set_status(StatusCode.ERROR)
                 span.set_attribute("error.type", "McpOperationError")
@@ -326,18 +372,20 @@ class McpCapture:
 
             @functools.wraps(handler)
             async def run_async(*args: Any, **kwargs: Any) -> Any:
-                async with self._scope(label, method, kind, (*args, *kwargs.values())):
+                scope, evidence = self._scope(label, method, kind, (*args, *kwargs.values()))
+                async with scope:
                     result = await handler(*args, **kwargs)
-                    mark_result(result)
+                    mark_result(result, evidence)
                     return result
 
             return cast(F, run_async)
 
         @functools.wraps(handler)
         def run(*args: Any, **kwargs: Any) -> Any:
-            with self._scope(label, method, kind, (*args, *kwargs.values())):
+            scope, evidence = self._scope(label, method, kind, (*args, *kwargs.values()))
+            with scope:
                 result = handler(*args, **kwargs)
-                mark_result(result)
+                mark_result(result, evidence)
                 return result
 
         return cast(F, run)

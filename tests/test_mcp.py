@@ -21,6 +21,7 @@ from mcp_types import INVALID_PARAMS, METHOD_NOT_FOUND, CallToolResult, TextCont
 
 from agentrail_python import CapturePayloads, McpPayload
 from agentrail_python._handoff import keyed_hash
+from agentrail_python._queue import BATCH_BYTES
 from agentrail_python.mcp import _PAYLOAD_BYTES, mcp_capture
 from support import BODY_BYTES, CONTRACT, HASH_KEY, by_name, recording
 
@@ -61,8 +62,15 @@ def assert_named(spans: list[dict[str, Any]]) -> None:
         assert not unnamed, (span["name"], unnamed)
 
 
+async def refuse_listing(ctx: Any, call_next: Any) -> Any:
+    """An application middleware after Agentrail's that raises an ordinary exception."""
+    if ctx.method == "prompts/list":
+        raise PermissionError("synthetic refusal")
+    return await call_next(ctx)
+
+
 def server(capture: Any, *, middleware: bool = True, size: int = 0) -> MCPServer:
-    app = MCPServer("orders", middleware=[capture.middleware] if middleware else [])
+    app = MCPServer("orders", middleware=[capture.middleware, refuse_listing] if middleware else [refuse_listing])
 
     def checkout(item: str) -> str:
         return f"ordered {item}"
@@ -103,7 +111,9 @@ async def json_rpc(
     return response, response.json() if response.content else None
 
 
-def stateful_session(rec: Any, messages: list[dict[str, Any]], *, middleware: bool = True) -> tuple[str, list[Any]]:
+def stateful_session(
+    rec: Any, messages: list[dict[str, Any]], *, middleware: bool = True, requested: str = "2025-06-18"
+) -> tuple[str, list[Any]]:
     """Initialize a stateful streamable HTTP session behind the ASGI wrapper, then send ``messages``."""
     capture = mcp_capture(rec.client)
     app = server(capture, middleware=middleware)
@@ -120,7 +130,7 @@ def stateful_session(rec: Any, messages: list[dict[str, Any]], *, middleware: bo
                     "id": 1,
                     "method": "initialize",
                     "params": {
-                        "protocolVersion": "2025-06-18",
+                        "protocolVersion": requested,
                         "capabilities": {},
                         "clientInfo": {"name": "synthetic-client", "version": "1.0.0"},
                     },
@@ -264,7 +274,8 @@ def test_json_rpc_errors_keep_their_code() -> None:
 
 
 # Fails if someone breaks the wrappers without the middleware: each call must
-# stay a step of its own, naming its layer and method.
+# stay a step of its own, naming its layer and method, and an isError result
+# must say so as a transport step would.
 def test_handler_alone_is_the_step() -> None:
     with recording() as rec:
         app = server(mcp_capture(rec.client), middleware=False)
@@ -272,9 +283,13 @@ def test_handler_alone_is_the_step() -> None:
         async def run() -> None:
             async with McpClient(app) as client:
                 await client.call_tool("checkout", {"item": "x"})
+                await client.call_tool("refund", {"order": "o-1"})
 
         anyio.run(run)
         spans = rec.spans()
+        refund = by_name(spans, "mcp.tools/call:refund")
+        assert refund["attributes"][MCP["isError"]] is True and refund["status"] == 2
+        assert MCP["isError"] not in by_name(spans, "mcp.tools/call:checkout")["attributes"]
         tool = by_name(spans, "mcp.tools/call:checkout")
         assert (
             tool["attributes"].items()
@@ -367,7 +382,45 @@ def test_handler_step_keeps_the_session_hash() -> None:
         tool = by_name(rec.spans(), "mcp.tools/call:whoami")
         assert tool["attributes"]["agentrail.step"] is True
         assert tool["attributes"][MCP["sessionHash"]] == keyed_hash(HASH_KEY, session)
+        assert (
+            tool["attributes"].items()
+            >= {
+                MCP["clientName"]: "synthetic-client",
+                MCP["clientVersion"]: "1.0.0",
+                MCP["protocolVersion"]: "2025-06-18",
+            }.items()
+        )
         assert_named([tool])
+
+
+# Fails if an ordinary exception, which the SDK still answers as a JSON-RPC
+# error (code 0 on a handshake-era connection), is recorded without that code,
+# its size, or the contract's error type.
+def test_ordinary_exception_is_a_json_rpc_error() -> None:
+    listing = {"jsonrpc": "2.0", "id": 2, "method": "prompts/list"}
+    with recording() as rec:
+        _, answers = stateful_session(rec, [listing])
+        span = transport(rec.spans(), "mcp.prompts/list")
+        wanted = fixture_spans("sdk-mcp-jsonrpc-error")[0]["attributes"]["error.type"]
+        assert span["attributes"][MCP["errorCode"]] == answers[1]["error"]["code"] == 0
+        assert span["attributes"]["error.type"] == wanted and span["status"] == 2
+        assert span["attributes"][MCP["responseBytes"]] == len(compact(answers[1]).encode())
+
+
+# Fails if someone records the negotiated protocol version instead of the one
+# the message carried.
+def test_protocol_version_is_what_the_message_carried() -> None:
+    with recording() as rec:
+        _, answers = stateful_session(rec, [], requested="2024-01-01")
+        assert answers[0]["result"]["protocolVersion"] != "2024-01-01"
+        initialize = transport(rec.spans(), "mcp.initialize")
+        assert initialize["attributes"][MCP["protocolVersion"]] == "2024-01-01"
+
+
+# Fails if someone moves a size limit off the contract's.
+def test_payload_and_batch_limits_are_the_contracts() -> None:
+    assert OTLP["limits"]["mcpPayloadBytes"] == _PAYLOAD_BYTES
+    assert OTLP["limits"]["exportBatchBytes"] == BATCH_BYTES
 
 
 # Fails if a later mcp release that moves the connection makes the session

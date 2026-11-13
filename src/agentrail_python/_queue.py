@@ -29,8 +29,9 @@ T = TypeVar("T")
 
 EXPORT_BYTES = 16 * 1024 * 1024
 """The collector's request body limit (the contract's ``otlp.limits.bodyBytes``)."""
-BATCH_BYTES = EXPORT_BYTES - 1024 * 1024
-"""Where a batch closes: headroom for the resource, framing and estimate error."""
+BATCH_BYTES = 15 * 1024 * 1024
+"""Where a batch closes (the contract's ``otlp.limits.exportBatchBytes``): headroom
+for the resource, framing and estimate error."""
 PAYLOAD_BUDGET = 64 * 1024 * 1024
 """Payload text one queue may hold, the batch in flight included."""
 

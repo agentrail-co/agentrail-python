@@ -6,8 +6,9 @@ Copied, never edited here. Update them where they are made and copy them again.
   `apps/api/sdk-contract.json` as generated on branch `feat/mcp-analytics`
   from base `23eaa10c2e85a5b86648468bc5e28e304394c19e`, before that change was
   committed (SHA-256
-  `f8634c0c80a06de3b16f2568c9ec61093ff0fffcadbcb2f815ad8f7ae6e4e090`). It adds
-  `otlp.mcpAttributes`, `otlp.mcpSpans` and the `sdk-mcp-*` fixtures. It is
+  `7053f84fcf21edcf87fd3135972c54d5dc046fcd799513ec1bce305a55752eca`). It adds
+  `otlp.mcpAttributes`, `otlp.mcpSpans`, `otlp.limits.mcpPayloadBytes` and
+  `exportBatchBytes`, and the `sdk-mcp-*` fixtures. It is
   written by Argus's `apps/api/test/sdk-contract.test.ts`. Copy it again from
   the commit that lands it.
 - `interoperability/contract.json`, `javascript.json` and `markers.json` are

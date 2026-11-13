@@ -118,7 +118,10 @@ def redact(payload: ar.McpPayload):
 capture = mcp_capture(agentrail, capture_payloads=ar.CapturePayloads(redact=redact))
 ```
 
-A payload is truncated, and flagged, only when it alone cannot fit one export.
+A span's two payloads are cut together to 14 MiB, the longer first, and
+flagged; nothing shorter is cut. A request the MCP SDK refuses before its
+middleware runs (a malformed body, a wrong header, an unknown session) is no
+MCP step; behind `agentrail.asgi` it is still recorded as its HTTP request.
 
 Agentrail never fails your request: anything it could not capture or send goes
 to your `on_error` callback.

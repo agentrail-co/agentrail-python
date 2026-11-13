@@ -3931,12 +3931,13 @@
       "protocolVersion": "agentrail.mcp.protocol.version"
     },
     "mcpSpans": {
-      "name": "mcp.<method>, or mcp.<method>:<name> for tools/call, resources/read and prompts/get (the tool, the resource URI, the prompt), at most 256 UTF-16 units",
-      "transport": "One span per JSON-RPC message the server received, set as a step (agentrail.step true, agentrail.step.surface mcp, agentrail.step.kind tool.call for tools/call and mcp.<method> otherwise), with layer transport. ERROR status for a JSON-RPC error (jsonrpc.error_code set) or a tool result with isError (result.is_error true).",
-      "handler": "A tool, resource or prompt callback inside a transport span: its child, layer handler, and no step (no agentrail.step). Alone, as an SDK without the transport wrapper sends it, it is the step itself.",
+      "name": "Transport span: mcp.<method>, or mcp.<method>:<name> for tools/call, resources/read and prompts/get (the tool, the requested resource URI, the prompt), at most 256 UTF-16 units; with no name, mcp.<method> and no colon. Handler span: mcp.<method>:<the name the tool, resource or prompt was registered under>.",
+      "transport": "One span per JSON-RPC message the server received, set as a step (agentrail.step true, agentrail.step.surface mcp, agentrail.step.kind tool.call for tools/call and mcp.<method> otherwise), with layer transport. client.name, client.version and protocol.version are what that message carried (its _meta, the mcp-protocol-version header, or for initialize its params), never a negotiated value. ERROR status for a JSON-RPC error answer, whatever raised it (jsonrpc.error_code set to the code on the wire), a tool result with isError (result.is_error true), or a request the transport refused with an HTTP status of 400 or more and no JSON-RPC answer.",
+      "errorTypes": "error.type on an ERROR span: McpJsonRpcError for a JSON-RPC error answer, McpOperationError for a tool result with isError, McpTransportRejected for a request refused with no JSON-RPC answer, otherwise the thrown error's own type name.",
+      "handler": "A tool, resource or prompt callback inside a transport span: its child, layer handler, and no step (no agentrail.step). Alone, as an SDK without the transport wrapper sends it, it is the step itself and carries what a transport span would where the callback can see it: client name, version and protocol, session.id_hash, and result.is_error for a tools/call result with isError.",
       "sizes": "request.bytes and response.bytes are the UTF-8 length of the JSON-RPC message as the SDK encodes it, without whitespace.",
-      "session": "session.id_hash is the keyed hash (the resource hash key) of the Mcp-Session-Id the server issued; absent where the transport has none. It needs agentrail.hash_key_id on the resource.",
-      "payloads": "request.payload and response.payload are sent only when the application turns payload capture on, as JSON text after its redact hook; a hook that returns null sends none. No length bounds them; an SDK truncates one only when it alone cannot fit limits.bodyBytes, and sets its truncated flag. The collector keeps them only for a source whose Admin turned payload capture on."
+      "session": "session.id_hash is the keyed hash (the resource hash key, as principal ids are hashed) of the Mcp-Session-Id the server issued, never an id only a request carried; absent where the server issued none (stateless HTTP, stdio, the 2026-07-28 protocol). It needs agentrail.hash_key_id on the resource.",
+      "payloads": "request.payload (the request params) and response.payload (the result, or the error object) are sent only when the application turns payload capture on, which needs a redact hook, as JSON text after it; a hook that drops the payload sends neither, and one that fails or returns what is not JSON is the loss code payload_redact_failed. A request with no answer (a notification, a cancelled request) still sends its request payload. No length of ours bounds them, except that a span's two payloads together are cut to limits.mcpPayloadBytes (UTF-8, on a character boundary), the longer first, with its truncated flag set, so one span always fits an export. An SDK holds at most 64 MiB of payload text per queue (loss code payload_budget). The collector keeps them only for a source whose Admin turned payload capture on."
     },
     "logAttributes": {
       "stableId": "agentrail.log.id",
@@ -3953,7 +3954,9 @@
       "bodyBytes": 16777216,
       "records": 10000,
       "recordIdCharacters": 256,
-      "selectedTextCharacters": 4096
+      "selectedTextCharacters": 4096,
+      "mcpPayloadBytes": 14680064,
+      "exportBatchBytes": 15728640
     }
   },
   "traceHandoff": {
