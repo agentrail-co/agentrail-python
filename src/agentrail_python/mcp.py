@@ -95,7 +95,8 @@ def _is_error(result: object) -> bool:
 
 
 def _compact(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    """Compact JSON text; NaN and Infinity, which are not JSON, raise ValueError."""
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def _byte_length(message: object) -> int | None:
@@ -131,7 +132,7 @@ def _payload_text(value: object) -> str:
     text = _compact(value)
     if not well_formed(text):
         # A lone surrogate cannot travel as text; escaped, it is the same JSON.
-        text = json.dumps(value, separators=(",", ":"))
+        text = json.dumps(value, separators=(",", ":"), allow_nan=False)
     return text
 
 

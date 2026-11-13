@@ -550,6 +550,38 @@ def test_response_bytes_match_the_wire() -> None:
         assert tool["attributes"][MCP["responseBytes"]] == sizes[0]
 
 
+# Fails if someone reads the client from the session's handshake when the
+# message's own _meta names it (the contract reads the message first).
+def test_message_client_info_comes_first() -> None:
+    meta = {"io.modelcontextprotocol/clientInfo": {"name": "per-message-client", "version": "2.0.0"}}
+    call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "checkout", "arguments": {"item": "x"}, "_meta": meta},
+    }
+    with recording() as rec:
+        stateful_session(rec, [call])
+        tool = transport(rec.spans(), "mcp.tools/call:checkout")
+        assert tool["attributes"][MCP["clientName"]] == "per-message-client"
+        assert tool["attributes"][MCP["clientVersion"]] == "2.0.0"
+
+
+# Fails if a hook's NaN or Infinity is sent as (invalid) JSON instead of
+# dropping the payload and reporting it.
+def test_non_finite_payload_is_a_redact_failure() -> None:
+    def redact(payload: McpPayload) -> Mapping[str, Any] | None:
+        if payload["method"] != "tools/call":
+            return None
+        return {"request": {"score": float("nan")}, "response": {"text": "\ud800", "limit": float("inf")}}
+
+    spans, codes, results = call_with_payloads(redact, "checkout", {"item": "x"})
+    assert "ordered x" in repr(results[0])
+    tool = transport(spans, "mcp.tools/call:checkout")
+    assert not {MCP["requestPayload"], MCP["responsePayload"]} & tool["attributes"].keys()
+    assert codes.count("payload_redact_failed") == 1
+
+
 # Fails if someone records the negotiated protocol version instead of the one
 # the message carried.
 def test_protocol_version_is_what_the_message_carried() -> None:
