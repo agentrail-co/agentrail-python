@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from opentelemetry.proto.collector.logs.v1.logs_service_pb2 import ExportLogsServiceRequest
@@ -18,6 +20,11 @@ from agentrail_python import CollectorOptions, Options, QueueOptions
 
 SECRET = "synthetic-collector-secret"
 HASH_KEY = "synthetic-workspace-hash-key"
+CONTRACT: dict[str, Any] = json.loads(
+    (Path(__file__).parent.parent / "testdata" / "sdk-contract.json").read_text("utf-8")
+)
+# The collector refuses a request body past this, as the stand-in does.
+BODY_BYTES: int = CONTRACT["otlp"]["limits"]["bodyBytes"]
 
 
 def value_of(value: AnyValue) -> Any:
@@ -103,9 +110,13 @@ def collector(status: int = 200) -> Iterator[Collector]:
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(length)
             signal = self.path.rsplit("/", 1)[-1]
-            with state.lock:
-                state.packets.append((signal, body, {k.lower(): v for k, v in self.headers.items()}))
-            self.send_response(state.status)
+            status = state.status
+            if length > BODY_BYTES:
+                status = 413
+            else:
+                with state.lock:
+                    state.packets.append((signal, body, {k.lower(): v for k, v in self.headers.items()}))
+            self.send_response(status)
             self.send_header("content-type", "application/x-protobuf")
             self.send_header("content-length", "0")
             self.end_headers()

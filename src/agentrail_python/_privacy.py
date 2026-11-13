@@ -30,10 +30,16 @@ from opentelemetry.trace import (
 from opentelemetry.util.types import AttributeValue
 
 from ._handoff import valid_marker
-from ._runtime import Attributes, Runtime, SpanMeta
+from ._runtime import Attributes, McpEvidence, Runtime, SpanMeta
 from ._text import bounded, js_json, utf16_length, valid_text
 
 _LIMIT = 4096
+REQUEST_PAYLOAD = "agentrail.mcp.request.payload"
+RESPONSE_PAYLOAD = "agentrail.mcp.response.payload"
+REQUEST_TRUNCATED = "agentrail.mcp.request.truncated"
+RESPONSE_TRUNCATED = "agentrail.mcp.response.truncated"
+_PAYLOADS = frozenset((REQUEST_PAYLOAD, RESPONSE_PAYLOAD))
+_PAYLOAD_KEYS = _PAYLOADS | {REQUEST_TRUNCATED, RESPONSE_TRUNCATED}
 
 
 def clean_context(context: SpanContext) -> SpanContext:
@@ -116,7 +122,7 @@ def copy_span(span: ReadableSpan, meta: SpanMeta, runtime: Runtime) -> ReadableS
         # one per message) is supporting work, not a second entry.
         kind = SpanKind.INTERNAL
     mark = meta.mark
-    entry = mark is not None or kind in (SpanKind.SERVER, SpanKind.CONSUMER)
+    entry = (mark is not None and mark.step) or kind in (SpanKind.SERVER, SpanKind.CONSUMER)
     if entry:
         identity = mark.identity if mark is not None and mark.identity is not None else meta.state.principal()
         attributes.update(identity)
@@ -127,25 +133,25 @@ def copy_span(span: ReadableSpan, meta: SpanMeta, runtime: Runtime) -> ReadableS
     name = f"HTTP {method}" if isinstance(method, str) else "backend.operation"
     if mark is not None:
         name = mark.name
-        attributes["agentrail.step"] = True
-        attributes["agentrail.step.surface"] = mark.details.surface
-        attributes["agentrail.step.kind"] = mark.details.kind
+        if mark.step:
+            attributes["agentrail.step"] = True
+            attributes["agentrail.step.surface"] = mark.details.surface
+            attributes["agentrail.step.kind"] = mark.details.kind
         if mark.performance is not None:
             attributes.update(mark.performance)
         mcp = mark.details.mcp
         if mcp is not None:
-            # The OpenTelemetry MCP server span's names. A resource is named only
-            # by its URI there, which can carry what was asked for, so it gets none.
+            # Resource URIs have no standard name attribute.
             for key, value, limit in (
                 ("mcp.method.name", mcp.method, 128),
                 ("gen_ai.tool.name", mcp.name if mcp.method == "tools/call" else None, 256),
                 ("gen_ai.prompt.name", mcp.name if mcp.method == "prompts/get" else None, 256),
-                ("agentrail.mcp.client.name", mcp.client, 128),
-                ("agentrail.mcp.client.version", mcp.client_version, 128),
-                ("agentrail.mcp.protocol.version", mcp.protocol, 64),
             ):
                 if value:
                     attributes[key] = bounded(value, limit)
+            _client_details(attributes, mcp.client, mcp.client_version, mcp.protocol)
+        if mark.mcp is not None:
+            _mcp_attributes(attributes, mark.mcp)
     links = [Link(clean_context(link.context)) for link in span.links]
     if kind == SpanKind.SERVER:
         links.extend(Link(clean_context(link.context)) for link in meta.state.links)
@@ -164,6 +170,93 @@ def copy_span(span: ReadableSpan, meta: SpanMeta, runtime: Runtime) -> ReadableS
         start_time=span.start_time,
         end_time=span.end_time,
         instrumentation_scope=runtime.scope,
+    )
+
+
+def _client_details(attributes: Attributes, client: str | None, version: str | None, protocol: str | None) -> None:
+    for key, value, limit in (
+        ("agentrail.mcp.client.name", client, 128),
+        ("agentrail.mcp.client.version", version, 128),
+        ("agentrail.mcp.protocol.version", protocol, 64),
+    ):
+        if value:
+            attributes[key] = bounded(value, limit)
+
+
+def _mcp_attributes(attributes: Attributes, evidence: McpEvidence) -> None:
+    """The contract's ``otlp.mcpAttributes``. Payloads are exempt from the text limit."""
+    attributes["agentrail.mcp.layer"] = evidence.layer
+    if evidence.method is not None:
+        attributes["agentrail.mcp.method"] = evidence.method
+    _client_details(attributes, evidence.client, evidence.client_version, evidence.protocol)
+    values = (
+        ("agentrail.mcp.session.id_hash", evidence.session_hash),
+        ("agentrail.mcp.request.bytes", evidence.request_bytes),
+        ("agentrail.mcp.response.bytes", evidence.response_bytes),
+        ("agentrail.mcp.jsonrpc.error_code", evidence.error_code),
+        (REQUEST_PAYLOAD, evidence.request_payload),
+        (RESPONSE_PAYLOAD, evidence.response_payload),
+    )
+    for key, value in values:
+        if value is not None:
+            attributes[key] = value
+    for key, flag in (
+        ("agentrail.mcp.result.is_error", evidence.is_error),
+        (REQUEST_TRUNCATED, evidence.request_truncated and evidence.request_payload is not None),
+        (RESPONSE_TRUNCATED, evidence.response_truncated and evidence.response_payload is not None),
+    ):
+        if flag:
+            attributes[key] = True
+
+
+def _utf8_length(value: str) -> int:
+    return len(value.encode("utf-8", "surrogatepass"))
+
+
+def span_weight(span: ReadableSpan) -> tuple[int, int]:
+    """An over-estimate of the span's OTLP protobuf size, and its payload bytes."""
+    size = 256 + _utf8_length(span.name) + 64 * len(span.links)
+    payload = 0
+    for key, value in (span.attributes or {}).items():
+        size += 16 + len(key)
+        if isinstance(value, str):
+            length = _utf8_length(value)
+            size += length
+            if key in _PAYLOADS:
+                payload += length
+        else:
+            size += 16
+    return size, payload
+
+
+def log_weight(record: ReadableLogRecord) -> tuple[int, int]:
+    """An over-estimate of the record's OTLP protobuf size; logs carry no payloads."""
+    log = record.log_record
+    body = log.body
+    size = 256 + (_utf8_length(body) if isinstance(body, str) else 0)
+    size += sum(
+        16 + len(key) + (_utf8_length(value) if isinstance(value, str) else 16)
+        for key, value in (log.attributes or {}).items()
+    )
+    return size, 0
+
+
+def without_payloads(span: ReadableSpan) -> ReadableSpan:
+    """The same sanitized copy without its payload attributes."""
+    attributes = {key: value for key, value in (span.attributes or {}).items() if key not in _PAYLOAD_KEYS}
+    return ReadableSpan(
+        name=span.name,
+        context=span.get_span_context(),
+        parent=span.parent,
+        resource=span.resource,
+        attributes=attributes,
+        events=(),
+        links=span.links,
+        kind=span.kind,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
     )
 
 

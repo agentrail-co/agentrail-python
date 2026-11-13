@@ -17,20 +17,22 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, StatusCode, TraceFlags
 
-from ._handoff import HANDOFF_HEADER, Refused, parse_traceparent, verify
+from ._handoff import HANDOFF_HEADER, Refused, keyed_hash, parse_traceparent, verify
 from ._options import (
     LOCATION_SOURCES,
     PRINCIPAL_KINDS,
     SURFACES,
+    CaptureCode,
     ConfigurationError,
     IncomingRequest,
     MilestoneContext,
+    Signal,
     VerifiedIdentity,
 )
 from ._performance import performance_attributes
 from ._privacy import StructuredLog, clean_context, copy_log
 from ._queue import ExportQueue, QueueStats
-from ._runtime import Attributes, Mark, RequestState, Runtime
+from ._runtime import Attributes, Mark, McpEvidence, RequestState, Runtime
 from ._suppression import suppressed
 from ._text import bounded, valid_text
 from ._version import VERSION
@@ -62,16 +64,28 @@ class MilestoneScope:
     The block's exception is recorded and re-raised unchanged.
     """
 
-    def __init__(self, client: Client, name: str, details: MilestoneContext) -> None:
+    def __init__(
+        self,
+        client: Client,
+        name: str,
+        details: MilestoneContext,
+        *,
+        step: bool = True,
+        mcp: McpEvidence | None = None,
+    ) -> None:
         client._validate_milestone(name, details)  # pyright: ignore[reportPrivateUsage]
         self._client = client
         self._name = name
         self._details = details
+        self._step = step
+        self._mcp = mcp
         self._span: Span | None = None
         self._token: object | None = None
 
     def __enter__(self) -> MilestoneScope:
-        span, ctx = self._client._start(self._name, self._details)  # pyright: ignore[reportPrivateUsage]
+        span, ctx = self._client._start(  # pyright: ignore[reportPrivateUsage]
+            self._name, self._details, step=self._step, mcp=self._mcp
+        )
         self._span = span
         self._token = otel_context.attach(ctx)
         return self
@@ -200,7 +214,13 @@ class Client:
             raise ConfigurationError("Milestone name and kind must contain 1-256 characters, with a known surface.")
 
     def _start(
-        self, name: str, details: MilestoneContext, identity: Attributes | None = None
+        self,
+        name: str,
+        details: MilestoneContext,
+        identity: Attributes | None = None,
+        *,
+        step: bool = True,
+        mcp: McpEvidence | None = None,
     ) -> tuple[Span, otel_context.Context]:
         performance = None
         if details.performance is not None:
@@ -210,16 +230,24 @@ class Client:
                 self._runtime.report("invalid_performance", "context")
         base = otel_context.get_current()
         state = self._runtime.state(base)
+        continued: list[Link] = []
+        if state is not None and state.entry is not None:
+            current = trace.get_current_span(base).get_span_context()
+            if current.is_valid and (current.is_remote or current.trace_id != state.entry.trace_id):
+                # A trace continued from unsigned input inside the request (the MCP
+                # SDK continues a client's _meta traceparent) is a link, never the parent.
+                continued.append(Link(clean_context(current)))
+                base = trace.set_span_in_context(NonRecordingSpan(state.entry), base)
         if state is None:
             external = trace.get_current_span(base).get_span_context()
             links = [Link(clean_context(external))] if external.is_valid else []
             state = RequestState(links=links)
             # Its own managed scope: an unrelated caller's trace is a link, never the parent.
             base = otel_context.set_value(self._runtime.state_key, state, otel_context.Context())
-        mark = Mark(name=name, details=details, performance=performance, identity=identity)
+        mark = Mark(name=name, details=details, performance=performance, identity=identity, step=step, mcp=mcp)
         marked = otel_context.set_value(self._runtime.mark_key, mark, base)
         parented = trace.get_current_span(base).get_span_context().is_valid
-        span = self._tracer.start_span(name, context=marked, links=[] if parented else state.links)
+        span = self._tracer.start_span(name, context=marked, links=continued + ([] if parented else state.links))
         if not span.is_recording():
             self._runtime.report("entry_not_recording", "traces")
         return span, trace.set_span_in_context(span, base)
@@ -278,6 +306,16 @@ class Client:
 
         return AgentrailWSGIMiddleware(app, client=self)
 
+    def _keyed_hash(self, value: str) -> str:
+        """The keyed hash principal IDs use: 32 lowercase hex under the workspace key."""
+        return keyed_hash(self._runtime.options.input.hash_key, value)
+
+    def _payload_room(self) -> bool:
+        return self._spans.payload_room()
+
+    def _report(self, code: CaptureCode, signal: Signal) -> None:
+        self._runtime.report(code, signal)
+
     def _managed(self) -> bool:
         return not self._closed and not suppressed() and self._runtime.state() is not None
 
@@ -318,6 +356,7 @@ class Client:
         span = self._tracer.start_span(
             f"HTTP {request.method}", context=ctx, kind=SpanKind.SERVER, attributes=attributes
         )
+        state.entry = span.get_span_context()
         if not span.is_recording():
             self._runtime.report("entry_not_recording", "traces")
         return span, trace.set_span_in_context(span, ctx)

@@ -3,7 +3,8 @@
     "Performance evidence requires source-granted operation permissions and an explicit operation hash/key ID. A resend cannot add or change evidence; the first authenticated producer is retained. Plugin calls without an operation reference remain unassigned. Unknown package releases are never replaced by the latest package.",
     "Location is an annotation: a resent event retains its first stored actor.location even when a later lookup differs. Other event facts must match.",
     "What the Argus collector takes and how its engine reads a marker. Written by apps/api/test/sdk-contract.test.ts in argus.",
-    "ingestRequest is the body of POST /ingest/events; browserCall is the body of POST /ingest/browser.",
+    "ingestRequest is the body of POST /ingest/events; browserCall is the body of POST /ingest/browser; browserPayloadCall is the body of POST /ingest/browser/payloads, one WebMCP tool run with the content its page captured, sent as JSON text while the page is open (at most 16 MiB; a payload is truncated only when it cannot fit, its truncated flag set).",
+    "A WebMCP tool run (kind agent.tool.executed) carries webmcp: the tool name (null where it does not match http.tool's pattern), how it ended (answered, threw, or is_error for a result that said it failed), and the JSON size of its arguments and result. Never their content, except in browserPayloadCall.",
     "The schemas are what the collector stores. It does not refuse a call for a field they do not name: it removes the field, stores none of it and counts it on the call. Anything else they do not allow, a new value of a field they name included, refuses the call.",
     "The collector also refuses what these schemas cannot say: an event timed more than 30 days before its call arrives, or more than a day after; an event carrying a hashed address, principal or registration in a call whose component names no hashKeyId; a fingerprint naming more than 64 components, or with a component nested more than 32 levels deep; and a string or field name anywhere in a body holding a NUL (U+0000) or half a surrogate pair.",
     "markers.parsed is the engine reading each raw value as an agent sent it back: case ignored, \"-\" dropped, I and L read as 1 and O as 0."
@@ -862,6 +863,18 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "errorCode": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": -2147483648,
+                          "maximum": 2147483647
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -869,6 +882,69 @@
                     "isError",
                     "progressToken",
                     "capabilities"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "webmcp": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "tool": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9_./-]{1,128}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "answered",
+                        "threw",
+                        "is_error"
+                      ]
+                    },
+                    "argumentBytes": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resultBytes": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "outcome"
                   ],
                   "additionalProperties": false
                 },
@@ -1503,6 +1579,69 @@
               "default": null,
               "type": "null"
             },
+            "webmcp": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "tool": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9_./-]{1,128}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "outcome": {
+                      "type": "string",
+                      "enum": [
+                        "answered",
+                        "threw",
+                        "is_error"
+                      ]
+                    },
+                    "argumentBytes": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resultBytes": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "tool",
+                    "outcome"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "redactions": {
               "type": "array",
               "items": {
@@ -2131,6 +2270,534 @@
     ],
     "additionalProperties": false
   },
+  "browserPayloadCall": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+      "key": {
+        "type": "string",
+        "minLength": 32,
+        "maxLength": 128
+      },
+      "component": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "surfaces": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "const": "browser"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "version",
+          "surfaces"
+        ],
+        "additionalProperties": false
+      },
+      "tab": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "event": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "surface": {
+            "type": "string",
+            "const": "browser"
+          },
+          "kind": {
+            "type": "string",
+            "const": "agent.tool.executed"
+          },
+          "start": {
+            "type": "number"
+          },
+          "end": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "clock": {
+            "type": "string",
+            "const": "browser"
+          },
+          "emittedBy": {
+            "type": "string",
+            "enum": [
+              "argus",
+              "other"
+            ]
+          },
+          "resource": {
+            "type": "object",
+            "properties": {
+              "serviceName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "serviceInstanceId": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "serviceName",
+              "serviceInstanceId"
+            ],
+            "additionalProperties": false
+          },
+          "span": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "traceId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "spanId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "parentSpanId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "server",
+                      "client",
+                      "internal",
+                      "producer",
+                      "consumer"
+                    ]
+                  },
+                  "publicEntry": {
+                    "type": "boolean"
+                  },
+                  "subtreeSpanIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "links": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "traceId": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "spanId": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "traceId",
+                        "spanId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "traceId",
+                  "spanId",
+                  "parentSpanId",
+                  "kind",
+                  "publicEntry",
+                  "subtreeSpanIds",
+                  "links"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "session": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "previousId": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "previousId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "http": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "host": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "location": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "contentType": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "linksOut": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "requestBytes": {
+                    "default": null,
+                    "type": "null"
+                  },
+                  "responseBytes": {
+                    "default": null,
+                    "type": "null"
+                  },
+                  "tool": {
+                    "default": null,
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "method",
+                  "host",
+                  "path",
+                  "status",
+                  "location",
+                  "contentType",
+                  "linksOut"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actor": {
+            "type": "object",
+            "properties": {
+              "egress": {
+                "type": "null"
+              },
+              "location": {
+                "type": "null"
+              },
+              "userAgent": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "client": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "clientVersion": {
+                "default": null,
+                "type": "null"
+              },
+              "protocol": {
+                "default": null,
+                "type": "null"
+              },
+              "accept": {
+                "default": null,
+                "type": "null"
+              },
+              "fetchMetadata": {
+                "default": null,
+                "type": "null"
+              },
+              "network": {
+                "default": null,
+                "type": "null"
+              },
+              "signature": {
+                "default": null,
+                "type": "null"
+              },
+              "verifiedBot": {
+                "default": null,
+                "type": "null"
+              },
+              "transport": {
+                "default": null,
+                "type": "null"
+              }
+            },
+            "required": [
+              "egress",
+              "userAgent",
+              "client"
+            ],
+            "additionalProperties": false
+          },
+          "principal": {
+            "type": "null"
+          },
+          "registration": {
+            "type": "null"
+          },
+          "markers": {
+            "type": "object",
+            "properties": {
+              "served": {
+                "type": "array",
+                "items": false,
+                "maxItems": 0
+              },
+              "seen": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "served",
+              "seen"
+            ],
+            "additionalProperties": false
+          },
+          "content": {
+            "default": null,
+            "type": "null"
+          },
+          "webmcp": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9_./-]{1,128}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "threw",
+                  "is_error"
+                ]
+              },
+              "argumentBytes": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "resultBytes": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "tool",
+              "outcome"
+            ],
+            "additionalProperties": false
+          },
+          "redactions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "field",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "id",
+          "surface",
+          "kind",
+          "start",
+          "end",
+          "clock",
+          "emittedBy",
+          "resource",
+          "span",
+          "session",
+          "http",
+          "actor",
+          "principal",
+          "registration",
+          "markers",
+          "webmcp",
+          "redactions"
+        ],
+        "additionalProperties": false
+      },
+      "payload": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestTruncated": {
+            "type": "boolean"
+          },
+          "responseTruncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "request",
+          "response",
+          "requestTruncated",
+          "responseTruncated"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "key",
+      "component",
+      "tab",
+      "event",
+      "payload"
+    ],
+    "additionalProperties": false
+  },
   "otlp": {
     "protocolDefinitions": "open-telemetry/opentelemetry-proto@v1.9.0",
     "traces": {
@@ -2235,7 +2902,7 @@
                       {
                         "traceId": "11111111111111111111111111111111",
                         "spanId": "aaaaaaaaaaaaaaaa",
-                        "name": "mcp.tools.call:synthetic_tool",
+                        "name": "mcp.tools/call:synthetic_tool",
                         "kind": 1,
                         "startTimeUnixNano": "1793743200000123456",
                         "endTimeUnixNano": "1793743200010000000",
@@ -2273,7 +2940,7 @@
                           {
                             "key": "agentrail.step.kind",
                             "value": {
-                              "stringValue": "mcp.tools.call"
+                              "stringValue": "tool.call"
                             }
                           },
                           {
@@ -2295,17 +2962,577 @@
             "events": [
               {
                 "surface": "mcp",
-                "kind": "mcp.tools.call",
+                "kind": "tool.call",
                 "principal": {
                   "kind": "user",
                   "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 },
                 "actor": {
                   "client": "synthetic-client"
-                }
+                },
+                "session": null,
+                "content": null
               }
             ],
             "logs": []
+          }
+        },
+        {
+          "name": "sdk-mcp-transport-with-handler",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    },
+                    {
+                      "key": "agentrail.hash_key_id",
+                      "value": {
+                        "stringValue": "0123456789abcdef"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "mcp.tools/call:synthetic_tool",
+                        "kind": 1,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "attributes": [
+                          {
+                            "key": "agentrail.step",
+                            "value": {
+                              "boolValue": true
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.surface",
+                            "value": {
+                              "stringValue": "mcp"
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.kind",
+                            "value": {
+                              "stringValue": "tool.call"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.layer",
+                            "value": {
+                              "stringValue": "transport"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.method",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.session.id_hash",
+                            "value": {
+                              "stringValue": "dddddddddddddddddddddddddddddddd"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.name",
+                            "value": {
+                              "stringValue": "synthetic-client"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.version",
+                            "value": {
+                              "stringValue": "1.0.0"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.protocol.version",
+                            "value": {
+                              "stringValue": "2025-06-18"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.request.bytes",
+                            "value": {
+                              "intValue": "64"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.bytes",
+                            "value": {
+                              "intValue": "128"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "cccccccccccccccc",
+                        "name": "mcp.tools/call:synthetic_tool",
+                        "kind": 1,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "parentSpanId": "aaaaaaaaaaaaaaaa",
+                        "attributes": [
+                          {
+                            "key": "agentrail.mcp.layer",
+                            "value": {
+                              "stringValue": "handler"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.method",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": {
+            "spans": 2,
+            "events": [
+              {
+                "id": "otel:11111111111111111111111111111111:aaaaaaaaaaaaaaaa",
+                "surface": "mcp",
+                "kind": "tool.call",
+                "session": {
+                  "id": "mcp:dddddddddddddddddddddddddddddddd",
+                  "previousId": null
+                },
+                "content": {
+                  "jsonrpcId": null,
+                  "isError": null,
+                  "progressToken": null,
+                  "capabilities": null,
+                  "errorCode": null
+                },
+                "actor": {
+                  "client": "synthetic-client",
+                  "clientVersion": "1.0.0",
+                  "protocol": "2025-06-18"
+                }
+              }
+            ],
+            "logs": [],
+            "mcp": [
+              {
+                "layer": "transport",
+                "method": "tools/call",
+                "errorCode": null,
+                "isError": null,
+                "requestBytes": 64,
+                "responseBytes": 128
+              }
+            ],
+            "payloads": [
+              null
+            ]
+          }
+        },
+        {
+          "name": "sdk-mcp-jsonrpc-error",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    },
+                    {
+                      "key": "agentrail.hash_key_id",
+                      "value": {
+                        "stringValue": "0123456789abcdef"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "mcp.tools/call:synthetic_tool",
+                        "kind": 1,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "status": {
+                          "code": 2
+                        },
+                        "attributes": [
+                          {
+                            "key": "agentrail.step",
+                            "value": {
+                              "boolValue": true
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.surface",
+                            "value": {
+                              "stringValue": "mcp"
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.kind",
+                            "value": {
+                              "stringValue": "tool.call"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.layer",
+                            "value": {
+                              "stringValue": "transport"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.method",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.session.id_hash",
+                            "value": {
+                              "stringValue": "dddddddddddddddddddddddddddddddd"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.name",
+                            "value": {
+                              "stringValue": "synthetic-client"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.version",
+                            "value": {
+                              "stringValue": "1.0.0"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.protocol.version",
+                            "value": {
+                              "stringValue": "2025-06-18"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.request.bytes",
+                            "value": {
+                              "intValue": "64"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.bytes",
+                            "value": {
+                              "intValue": "128"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.jsonrpc.error_code",
+                            "value": {
+                              "intValue": "-32602"
+                            }
+                          },
+                          {
+                            "key": "error.type",
+                            "value": {
+                              "stringValue": "McpJsonRpcError"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": {
+            "spans": 1,
+            "events": [
+              {
+                "surface": "mcp",
+                "content": {
+                  "isError": null,
+                  "errorCode": -32602
+                }
+              }
+            ],
+            "logs": [],
+            "mcp": [
+              {
+                "layer": "transport",
+                "method": "tools/call",
+                "errorCode": -32602,
+                "isError": null,
+                "requestBytes": 64,
+                "responseBytes": 128
+              }
+            ],
+            "payloads": [
+              null
+            ]
+          }
+        },
+        {
+          "name": "sdk-mcp-tool-error-with-payload",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    },
+                    {
+                      "key": "agentrail.hash_key_id",
+                      "value": {
+                        "stringValue": "0123456789abcdef"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "mcp.tools/call:synthetic_tool",
+                        "kind": 1,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "status": {
+                          "code": 2
+                        },
+                        "attributes": [
+                          {
+                            "key": "agentrail.step",
+                            "value": {
+                              "boolValue": true
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.surface",
+                            "value": {
+                              "stringValue": "mcp"
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.kind",
+                            "value": {
+                              "stringValue": "tool.call"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.layer",
+                            "value": {
+                              "stringValue": "transport"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.method",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.session.id_hash",
+                            "value": {
+                              "stringValue": "dddddddddddddddddddddddddddddddd"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.name",
+                            "value": {
+                              "stringValue": "synthetic-client"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.version",
+                            "value": {
+                              "stringValue": "1.0.0"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.protocol.version",
+                            "value": {
+                              "stringValue": "2025-06-18"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.request.bytes",
+                            "value": {
+                              "intValue": "64"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.bytes",
+                            "value": {
+                              "intValue": "128"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.result.is_error",
+                            "value": {
+                              "boolValue": true
+                            }
+                          },
+                          {
+                            "key": "error.type",
+                            "value": {
+                              "stringValue": "tool_error"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.request.payload",
+                            "value": {
+                              "stringValue": "{\"name\":\"synthetic_tool\",\"arguments\":{\"q\":\"[redacted]\"}}"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.payload",
+                            "value": {
+                              "stringValue": "{\"content\":[{\"type\":\"text\",\"text\":\"synthetic fail"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.truncated",
+                            "value": {
+                              "boolValue": true
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": {
+            "spans": 1,
+            "events": [
+              {
+                "surface": "mcp",
+                "content": {
+                  "isError": true,
+                  "errorCode": null
+                }
+              }
+            ],
+            "logs": [],
+            "mcp": [
+              {
+                "layer": "transport",
+                "method": "tools/call",
+                "errorCode": null,
+                "isError": true,
+                "requestBytes": 64,
+                "responseBytes": 128
+              }
+            ],
+            "payloads": [
+              {
+                "request": "{\"name\":\"synthetic_tool\",\"arguments\":{\"q\":\"[redacted]\"}}",
+                "response": "{\"content\":[{\"type\":\"text\",\"text\":\"synthetic fail",
+                "requestTruncated": false,
+                "responseTruncated": true
+              }
+            ]
           }
         },
         {
@@ -2428,6 +3655,252 @@
           }
         },
         {
+          "name": "mcp-session-hash-without-key-id",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "mcp.tools/call:synthetic_tool",
+                        "kind": 1,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "attributes": [
+                          {
+                            "key": "agentrail.step",
+                            "value": {
+                              "boolValue": true
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.surface",
+                            "value": {
+                              "stringValue": "mcp"
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.kind",
+                            "value": {
+                              "stringValue": "tool.call"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.layer",
+                            "value": {
+                              "stringValue": "transport"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.method",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.session.id_hash",
+                            "value": {
+                              "stringValue": "dddddddddddddddddddddddddddddddd"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.name",
+                            "value": {
+                              "stringValue": "synthetic-client"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.version",
+                            "value": {
+                              "stringValue": "1.0.0"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.protocol.version",
+                            "value": {
+                              "stringValue": "2025-06-18"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.request.bytes",
+                            "value": {
+                              "intValue": "64"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.bytes",
+                            "value": {
+                              "intValue": "128"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mcp-unknown-layer",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    },
+                    {
+                      "key": "agentrail.hash_key_id",
+                      "value": {
+                        "stringValue": "0123456789abcdef"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "mcp.tools/call:synthetic_tool",
+                        "kind": 1,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "attributes": [
+                          {
+                            "key": "agentrail.step",
+                            "value": {
+                              "boolValue": true
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.surface",
+                            "value": {
+                              "stringValue": "mcp"
+                            }
+                          },
+                          {
+                            "key": "agentrail.step.kind",
+                            "value": {
+                              "stringValue": "tool.call"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.layer",
+                            "value": {
+                              "stringValue": "gateway"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.method",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "mcp.method.name",
+                            "value": {
+                              "stringValue": "tools/call"
+                            }
+                          },
+                          {
+                            "key": "gen_ai.tool.name",
+                            "value": {
+                              "stringValue": "synthetic_tool"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.session.id_hash",
+                            "value": {
+                              "stringValue": "dddddddddddddddddddddddddddddddd"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.name",
+                            "value": {
+                              "stringValue": "synthetic-client"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.client.version",
+                            "value": {
+                              "stringValue": "1.0.0"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.protocol.version",
+                            "value": {
+                              "stringValue": "2025-06-18"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.request.bytes",
+                            "value": {
+                              "intValue": "64"
+                            }
+                          },
+                          {
+                            "key": "agentrail.mcp.response.bytes",
+                            "value": {
+                              "intValue": "128"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "verified-hash-without-key-id",
           "signal": "traces",
           "request": {
@@ -2513,6 +3986,36 @@
       "pluginBinding": "agentrail.plugin.binding_id",
       "pluginInvocation": "agentrail.plugin.invocation_id"
     },
+    "mcpAttributes": {
+      "layer": "agentrail.mcp.layer",
+      "method": "agentrail.mcp.method",
+      "sessionHash": "agentrail.mcp.session.id_hash",
+      "errorCode": "agentrail.mcp.jsonrpc.error_code",
+      "isError": "agentrail.mcp.result.is_error",
+      "requestBytes": "agentrail.mcp.request.bytes",
+      "responseBytes": "agentrail.mcp.response.bytes",
+      "requestPayload": "agentrail.mcp.request.payload",
+      "responsePayload": "agentrail.mcp.response.payload",
+      "requestTruncated": "agentrail.mcp.request.truncated",
+      "responseTruncated": "agentrail.mcp.response.truncated",
+      "methodName": "mcp.method.name",
+      "rpcMethod": "rpc.method",
+      "toolName": "gen_ai.tool.name",
+      "promptName": "gen_ai.prompt.name",
+      "clientName": "agentrail.mcp.client.name",
+      "clientVersion": "agentrail.mcp.client.version",
+      "protocolVersion": "agentrail.mcp.protocol.version"
+    },
+    "mcpSpans": {
+      "name": "Transport span: mcp.<method>, or mcp.<method>:<name> for tools/call, resources/read and prompts/get (the tool, the requested resource URI without its userinfo, query or fragment, the prompt), at most 256 UTF-16 units; with no name, mcp.<method> and no colon. Handler span: mcp.<method>:<the name the tool, resource or prompt was registered under>.",
+      "transport": "One span per JSON-RPC message the server received, set as a step (agentrail.step true, agentrail.step.surface mcp, agentrail.step.kind tool.call for tools/call and mcp.<method> otherwise), with layer transport. protocol.version is what that message carried (its _meta, the mcp-protocol-version header, or for initialize its params), never a negotiated value; client.name and client.version are the message's own _meta clientInfo where it carries one, else what the client declared in its initialize. ERROR status for a JSON-RPC error answer, whatever raised it (jsonrpc.error_code set to the code on the wire when it is a 32-bit integer, -2147483648 to 2147483647, and omitted otherwise: the collector refuses an export carrying one outside that range), a tool result with isError (result.is_error true), or a request the transport refused with an HTTP status of 400 or more and no JSON-RPC answer.",
+      "errorTypes": "error.type on an ERROR span: McpJsonRpcError for a JSON-RPC error answer, tool_error for a tool result with isError (older SDKs used McpOperationError or mcp.toolResultError, which remain supported), McpTransportRejected for a request refused with no JSON-RPC answer, otherwise the thrown error's own type name.",
+      "standardNames": "mcp.method.name on transport and handler spans; gen_ai.tool.name for tools/call and gen_ai.prompt.name for prompts/get, using the requested name on transport spans and the registered name on handler spans, bounded to 256 UTF-16 units. Resources have no name attribute: mcp.resource.uri is omitted.",
+      "handler": "A tool, resource or prompt callback inside a transport span: its child, layer handler, and no step (no agentrail.step). Alone, as an SDK without the transport wrapper sends it, it is the step itself and carries what a transport span would where the callback can see it: client name, version and protocol, session.id_hash, and result.is_error for a tools/call result with isError.",
+      "sizes": "request.bytes and response.bytes are the UTF-8 length of the JSON-RPC message as the SDK encodes it, without whitespace.",
+      "session": "session.id_hash is the keyed hash (the resource hash key, as principal ids are hashed) of the Mcp-Session-Id the server issued, never an id only a request carried; absent where the server issued none (stateless HTTP, stdio, the 2026-07-28 protocol). It needs agentrail.hash_key_id on the resource.",
+      "payloads": "request.payload (the request params) and response.payload (the result, or the error object) are sent only when the application turns payload capture on, which needs a redact hook, as JSON text after it; a hook that drops the payload sends neither, and one that fails or returns what is not JSON is the loss code payload_redact_failed. A request with no answer (a notification, a cancelled request) still sends its request payload. No length of ours bounds them, except that a span's two payloads together are cut to limits.mcpPayloadBytes (UTF-8, on a character boundary), the longer first, with its truncated flag set, so one span always fits an export. An SDK holds at most 64 MiB of payload text per queue (loss code payload_budget). The collector keeps them only for a source whose Admin turned payload capture on."
+    },
     "logAttributes": {
       "stableId": "agentrail.log.id",
       "bodyAllowed": "agentrail.log.body_allowed"
@@ -2528,7 +4031,9 @@
       "bodyBytes": 16777216,
       "records": 10000,
       "recordIdCharacters": 256,
-      "selectedTextCharacters": 4096
+      "selectedTextCharacters": 4096,
+      "mcpPayloadBytes": 14680064,
+      "exportBatchBytes": 15728640
     }
   },
   "traceHandoff": {

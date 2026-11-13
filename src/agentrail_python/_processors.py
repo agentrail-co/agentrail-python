@@ -34,7 +34,7 @@ from opentelemetry.util.types import Attributes
 from ._client import Client
 from ._handoff import OWNED_HEADERS
 from ._options import ConfigurationError, Options, resolve
-from ._privacy import StructuredLog, copy_log, copy_span
+from ._privacy import StructuredLog, copy_log, copy_span, log_weight, span_weight, without_payloads
 from ._queue import ExportQueue
 from ._runtime import Runtime, SpanMeta
 from ._suppression import suppressed
@@ -229,6 +229,8 @@ class Processors:
             lambda batch: _export_spans(span_exporter, batch),
             lambda code, count: runtime.report(code, "traces", count),
             span_exporter.shutdown,
+            weigh=span_weight,
+            strip=without_payloads,
         )
         self.logs: ExportQueue[ReadableLogRecord] = ExportQueue(
             "logs",
@@ -236,6 +238,7 @@ class Processors:
             lambda batch: _export_logs(log_exporter, batch),
             lambda code, count: runtime.report(code, "logs", count),
             log_exporter.shutdown,
+            weigh=log_weight,
         )
         self.span_processor: SpanProcessor = _SpanProcessor(runtime, self.spans)
         self.log_processor: LogRecordProcessor = _LogProcessor(runtime, self.logs)

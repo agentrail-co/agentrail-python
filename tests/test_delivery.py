@@ -3,37 +3,42 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import threading
 import time
+import weakref
 from collections.abc import Sequence
+from typing import Generic, TypeVar
 
 import pytest
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
 from agentrail_python import CaptureCode, MilestoneContext, QueueOptions, create_processors
-from agentrail_python._queue import ExportQueue
-from support import collector, options, recording
+from agentrail_python._queue import BATCH_BYTES, EXPORT_BYTES, ExportQueue
+from support import BODY_BYTES, collector, options, recording
+
+T = TypeVar("T")
 
 
-class Gate:
+class Gate(Generic[T]):
     """An exporter that blocks until released."""
 
     def __init__(self, result: bool = True) -> None:
         self.release = threading.Event()
         self.started = threading.Event()
-        self.batches: list[list[int]] = []
+        self.batches: list[list[T]] = []
         self.result = result
 
-    def __call__(self, batch: Sequence[int]) -> bool:
+    def __call__(self, batch: Sequence[T]) -> bool:
         self.started.set()
         self.release.wait(10)
         self.batches.append(list(batch))
         return self.result
 
 
-def queue(gate: Gate, codes: list[tuple[CaptureCode, int]], **limits: float) -> ExportQueue[int]:
+def queue(gate: Gate[int], codes: list[tuple[CaptureCode, int]], **limits: float) -> ExportQueue[int]:
     settings = QueueOptions(
         max_records=3,
         batch_size=2,
@@ -48,7 +53,7 @@ def queue(gate: Gate, codes: list[tuple[CaptureCode, int]], **limits: float) -> 
 # Fails if someone stops counting the batch being exported against capacity,
 # or drops records without reporting them.
 def test_capacity_includes_the_batch_in_flight() -> None:
-    gate, codes = Gate(), list[tuple[CaptureCode, int]]()
+    gate, codes = Gate[int](), list[tuple[CaptureCode, int]]()
     q = queue(gate, codes)
     assert q.add(1) and q.add(2)
     assert gate.started.wait(5)
@@ -62,10 +67,80 @@ def test_capacity_includes_the_batch_in_flight() -> None:
     assert (stats.accepted, stats.exported, stats.dropped, stats.pending) == (3, 3, 1, 0)
 
 
+# Fails if someone closes batches by count alone, lets a full batch by size wait
+# for the next flush, or moves the limit off the collector's body limit.
+def test_batches_close_before_the_byte_limit() -> None:
+    assert EXPORT_BYTES == BODY_BYTES and BATCH_BYTES < EXPORT_BYTES
+    gate, codes = Gate[int](), list[tuple[CaptureCode, int]]()
+    gate.release.set()
+    settings = QueueOptions(max_records=10, batch_size=5, scheduled_delay=3600, export_timeout=1, flush_timeout=1)
+    q: ExportQueue[int] = ExportQueue(
+        "test",
+        settings,
+        gate,
+        lambda code, count: codes.append((code, count)),
+        lambda: None,
+        weigh=lambda size: (size, 0),
+        batch_bytes=100,
+    )
+    q.add(60)
+    q.add(50)
+    assert gate.started.wait(5)
+    q.add(30)
+    q.flush()
+    assert gate.batches == [[60], [50, 30]]
+    assert codes == []
+
+
+# Fails if someone stops counting the batch in flight against the payload
+# budget, drops the whole record instead of its payloads, or does not report it.
+def test_payload_budget_includes_the_batch_in_flight() -> None:
+    gate, codes = Gate[tuple[str, int]](), list[tuple[CaptureCode, int]]()
+    settings = QueueOptions(max_records=10, batch_size=1, scheduled_delay=3600, export_timeout=1, flush_timeout=1)
+    q: ExportQueue[tuple[str, int]] = ExportQueue(
+        "test",
+        settings,
+        gate,
+        lambda code, count: codes.append((code, count)),
+        lambda: None,
+        weigh=lambda record: (record[1], record[1]),
+        strip=lambda record: (record[0], 0),
+        payload_budget=100,
+    )
+    assert q.add(("a", 60))
+    assert gate.started.wait(5)
+    assert q.add(("b", 60))
+    assert codes == [("payload_budget", 1)]
+    gate.release.set()
+    q.flush()
+    assert q.add(("c", 60))
+    q.flush()
+    assert [list(batch) for batch in gate.batches] == [[("a", 60)], [("b", 0)], [("c", 60)]]
+    assert codes == [("payload_budget", 1)]
+
+
+# Fails if the idle worker keeps the last exported batch alive (up to a
+# batch of payload text held while nothing is sent).
+def test_exported_batch_is_released() -> None:
+    class Record:
+        pass
+
+    settings = QueueOptions(max_records=10, batch_size=5, scheduled_delay=3600, export_timeout=1, flush_timeout=1)
+    q: ExportQueue[Record] = ExportQueue("test", settings, lambda batch: True, lambda code, count: None, lambda: None)
+    record = Record()
+    alive = weakref.ref(record)
+    q.add(record)
+    q.flush()
+    del record
+    gc.collect()
+    assert alive() is None
+    q.shutdown()
+
+
 # Fails if someone lets flush wait past its deadline, or forgets to count and
 # report what the deadline cost.
 def test_flush_deadline_drops_and_reports() -> None:
-    gate, codes = Gate(), list[tuple[CaptureCode, int]]()
+    gate, codes = Gate[int](), list[tuple[CaptureCode, int]]()
     q = queue(gate, codes, flush_timeout=1.0, export_timeout=0.5)
     q.add(1)
     q.add(2)
@@ -83,7 +158,7 @@ def test_flush_deadline_drops_and_reports() -> None:
 # Fails if someone counts a rejected export as delivered, or accepts records
 # after shutdown without reporting them.
 def test_export_failure_and_closed() -> None:
-    gate, codes = Gate(result=False), list[tuple[CaptureCode, int]]()
+    gate, codes = Gate[int](result=False), list[tuple[CaptureCode, int]]()
     gate.release.set()
     q = queue(gate, codes)
     q.add(1)

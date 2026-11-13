@@ -8,7 +8,7 @@ import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 from urllib.parse import SplitResult, urlsplit
 
 from ._text import valid_text, well_formed
@@ -36,6 +36,8 @@ CaptureCode = Literal[
     "ignore_failed",
     "identity_outside_request",
     "invalid_performance",
+    "payload_redact_failed",
+    "payload_budget",
 ]
 Signal = Literal["traces", "logs", "context"]
 
@@ -145,6 +147,39 @@ class McpContext:
     protocol: str | None = None
     # The tool, resource or prompt's registered name, never a value from its arguments.
     name: str | None = None
+
+
+class McpPayload(TypedDict):
+    """What a redact hook sees of one MCP message: copies, never the live objects.
+
+    ``name`` is the tool, the resource URI (without userinfo, query or
+    fragment) or the prompt, else ``None``. ``request`` is the message's
+    params; ``response`` is the result or the JSON-RPC error the server
+    answers with (``code``, ``message``, ``data``), and ``None`` only for a
+    notification or a request ended without an answer (a cancellation). A
+    multi-round-trip ``requestState`` is removed from both.
+    """
+
+    method: str
+    name: str | None
+    request: Any
+    response: Any
+
+
+@dataclass(frozen=True, kw_only=True)
+class CapturePayloads:
+    """Opt in to sending MCP request and response content.
+
+    ``redact`` runs in the request, after the handler returns and before the
+    answer is written, on JSON copies.
+    Return the mapping to send (its ``request`` and ``response`` are encoded
+    as JSON text; a missing or ``None`` side is not sent), or ``None`` to send
+    neither. A hook that raises sends nothing for that message and is
+    reported as ``payload_redact_failed``, as is one whose result is not JSON;
+    the MCP call is unaffected.
+    """
+
+    redact: Callable[[McpPayload], Mapping[str, Any] | None]
 
 
 @dataclass(frozen=True, kw_only=True)

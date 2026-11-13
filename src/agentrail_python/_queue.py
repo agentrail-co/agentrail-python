@@ -4,6 +4,11 @@
 Capacity counts the batch being exported. One batch is exported at a time; the
 OTLP exporter owns retries within its timeout. Records only ever wait in
 memory: there is no disk persistence.
+
+A batch closes at ``batch_size`` records or before its estimated encoded size
+would pass ``BATCH_BYTES``, under the collector's 16 MiB body limit. MCP
+payload text is held to ``PAYLOAD_BUDGET`` per queue, the batch in flight
+included; past it a record keeps everything but its payloads.
 """
 
 from __future__ import annotations
@@ -22,6 +27,26 @@ from ._suppression import reporting
 
 T = TypeVar("T")
 
+EXPORT_BYTES = 16 * 1024 * 1024
+"""The collector's request body limit (the contract's ``otlp.limits.bodyBytes``)."""
+BATCH_BYTES = 15 * 1024 * 1024
+"""Where a batch closes (the contract's ``otlp.limits.exportBatchBytes``): headroom
+for the resource, framing and estimate error."""
+PAYLOAD_BUDGET = 64 * 1024 * 1024
+"""Payload text one queue may hold, the batch in flight included."""
+
+
+def _unweighted(_value: object) -> tuple[int, int]:
+    return 0, 0
+
+
+@dataclass(frozen=True)
+class _Record(Generic[T]):
+    sequence: int
+    value: T
+    size: int
+    payload: int
+
 
 @dataclass(frozen=True)
 class QueueStats:
@@ -32,7 +57,7 @@ class QueueStats:
 
 
 class _Batch(Generic[T]):
-    def __init__(self, records: list[tuple[int, T]]) -> None:
+    def __init__(self, records: list[_Record[T]]) -> None:
         self.records = records
         self.dropped = False
 
@@ -45,14 +70,27 @@ class ExportQueue(Generic[T]):
         export: Callable[[Sequence[T]], bool],
         report: Callable[[CaptureCode, int], None],
         shutdown_exporter: Callable[[], None],
+        *,
+        weigh: Callable[[T], tuple[int, int]] = _unweighted,
+        strip: Callable[[T], T] | None = None,
+        batch_bytes: int = BATCH_BYTES,
+        payload_budget: int = PAYLOAD_BUDGET,
     ) -> None:
+        """``weigh`` gives a record's estimated encoded size and its payload bytes;
+        ``strip`` returns it without its payloads."""
         self._options = options
         self._export = export
         self._report = report
         self._shutdown_exporter = shutdown_exporter
+        self._weigh = weigh
+        self._strip = strip
+        self._batch_bytes = batch_bytes
+        self._payload_budget = payload_budget
         self._lock = threading.Condition()
-        self._records: deque[tuple[int, T]] = deque()
+        self._records: deque[_Record[T]] = deque()
         self._active: _Batch[T] | None = None
+        self._queued_bytes = 0
+        self._payload = 0
         self._accepted = 0
         self._exported = 0
         self._dropped = 0
@@ -82,6 +120,8 @@ class ExportQueue(Generic[T]):
         self._lock = threading.Condition()
         self._records = deque()
         self._active = None
+        self._queued_bytes = 0
+        self._payload = 0
         self._accepted = 0
         self._exported = 0
         self._dropped = 0
@@ -100,6 +140,8 @@ class ExportQueue(Generic[T]):
 
     def add(self, value: T) -> bool:
         """Never waits for an export. False means the record was dropped."""
+        size, payload = self._weigh(value)
+        stripped = False
         with self._lock:
             retained = len(self._records) + (0 if self._active is None else len(self._active.records))
             code: CaptureCode | None = None
@@ -108,15 +150,30 @@ class ExportQueue(Generic[T]):
             elif retained >= self._options.max_records:
                 code = "queue_full"
             if code is None:
+                if payload > 0 and self._payload + payload > self._payload_budget and self._strip is not None:
+                    value = self._strip(value)
+                    size, payload = self._weigh(value)
+                    stripped = True
                 self._accepted += 1
                 self._pending += 1
-                self._records.append((self._accepted, value))
-                if len(self._records) >= self._options.batch_size:
+                self._payload += payload
+                self._queued_bytes += size
+                self._records.append(_Record(self._accepted, value, size, payload))
+                if len(self._records) >= self._options.batch_size or self._queued_bytes >= self._batch_bytes:
                     self._lock.notify_all()
-                return True
-            self._dropped += 1
-        self._report(code, 1)
-        return False
+            else:
+                self._dropped += 1
+        if code is not None:
+            self._report(code, 1)
+            return False
+        if stripped:
+            self._report("payload_budget", 1)
+        return True
+
+    def payload_room(self) -> bool:
+        """False once the payload budget is spent: a new payload would be dropped."""
+        with self._lock:
+            return self._payload < self._payload_budget
 
     def flush(self, timeout: float | None = None) -> None:
         """Attempts every record accepted when called. Delivery is not guaranteed."""
@@ -153,9 +210,9 @@ class ExportQueue(Generic[T]):
 
     def _outstanding(self, target: int) -> bool:
         active = self._active
-        if active is not None and not active.dropped and active.records[0][0] <= target:
+        if active is not None and not active.dropped and active.records[0].sequence <= target:
             return True
-        return len(self._records) > 0 and self._records[0][0] <= target
+        return len(self._records) > 0 and self._records[0].sequence <= target
 
     def _wait(self, target: int, deadline: float) -> None:
         count = 0
@@ -172,11 +229,13 @@ class ExportQueue(Generic[T]):
     def _abort(self, target: int) -> int:
         count = 0
         active = self._active
-        if active is not None and not active.dropped and active.records[0][0] <= target:
+        if active is not None and not active.dropped and active.records[0].sequence <= target:
             active.dropped = True
             count += len(active.records)
-        while self._records and self._records[0][0] <= target:
-            self._records.popleft()
+        while self._records and self._records[0].sequence <= target:
+            record = self._records.popleft()
+            self._queued_bytes -= record.size
+            self._payload -= record.payload
             count += 1
         self._dropped += count
         self._pending -= count
@@ -189,14 +248,21 @@ class ExportQueue(Generic[T]):
         records = self._records
         if not records:
             return None
-        if not self._closed and len(records) < size and records[0][0] > self._force:
+        full = len(records) >= size or self._queued_bytes >= self._batch_bytes
+        if not self._closed and not full and records[0].sequence > self._force:
             return None
-        count = min(len(records), size)
+        count = 0
+        total = 0
+        # Closes before the estimate would pass the limit; a record is never split.
+        while count < min(len(records), size) and (count == 0 or total + records[count].size <= self._batch_bytes):
+            total += records[count].size
+            count += 1
         # A partial batch never sweeps in records accepted after the flush that forced it.
-        if not self._closed and records[0][0] <= self._force:
-            while count > 1 and records[count - 1][0] > self._force:
+        if not self._closed and records[0].sequence <= self._force:
+            while count > 1 and records[count - 1].sequence > self._force:
                 count -= 1
         batch = _Batch([records.popleft() for _ in range(count)])
+        self._queued_bytes -= sum(record.size for record in batch.records)
         self._active = batch
         return batch
 
@@ -216,13 +282,14 @@ class ExportQueue(Generic[T]):
                         else:
                             self._lock.wait(remaining)
                         batch = self._next_batch()
-                values = [value for _, value in batch.records]
+                values = [record.value for record in batch.records]
                 try:
                     succeeded = self._export(values)
                 except Exception:  # noqa: BLE001 - a failed export is reported as loss, never raised
                     succeeded = False
                 with self._lock:
                     count = len(batch.records)
+                    self._payload -= sum(record.payload for record in batch.records)
                     reported = not batch.dropped
                     if reported:
                         self._pending -= count
@@ -230,6 +297,9 @@ class ExportQueue(Generic[T]):
                             self._exported += count
                         else:
                             self._dropped += count
+                    # Released before flush() can wake: once it returns, delivered
+                    # records, payloads included, are no longer held here.
+                    del values, batch
                     self._active = None
                     self._lock.notify_all()
                 if reported and not succeeded:
