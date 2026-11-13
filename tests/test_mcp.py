@@ -16,7 +16,7 @@ import anyio
 import httpx2
 import pytest
 from mcp.client.client import Client as McpClient
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from mcp_types import INVALID_PARAMS, METHOD_NOT_FOUND, CallToolResult, TextContent
 
 from agentrail_python import CapturePayloads, McpPayload
@@ -87,7 +87,12 @@ def server(capture: Any, *, middleware: bool = True, size: int = 0) -> MCPServer
     app.tool(name="synthetic_tool")(capture.tool("synthetic_tool", synthetic_tool))
     app.tool(name="big")(capture.tool("big", big))
     app.resource("catalog://items/sku", name="catalog")(capture.resource("catalog", catalog))
+
+    def whoami(ctx: Context) -> str:
+        return "synthetic"
+
     app.prompt(name="greet")(capture.prompt("greet", greet))
+    app.tool(name="whoami")(capture.tool("whoami", whoami))
     return app
 
 
@@ -98,10 +103,10 @@ async def json_rpc(
     return response, response.json() if response.content else None
 
 
-def stateful_session(rec: Any, messages: list[dict[str, Any]]) -> tuple[str, list[Any]]:
+def stateful_session(rec: Any, messages: list[dict[str, Any]], *, middleware: bool = True) -> tuple[str, list[Any]]:
     """Initialize a stateful streamable HTTP session behind the ASGI wrapper, then send ``messages``."""
     capture = mcp_capture(rec.client)
-    app = server(capture)
+    app = server(capture, middleware=middleware)
     asgi = rec.client.asgi(app.streamable_http_app(json_response=True))
     answers: list[Any] = []
     session: list[str] = []
@@ -212,6 +217,9 @@ def test_stateful_http_session_and_sizes() -> None:
         notified = transport(spans, "mcp.notifications/initialized")
         assert notified["attributes"][MCP["sessionHash"]] == expected
         assert MCP["responseBytes"] not in notified["attributes"]
+        assert notified["attributes"][MCP["requestBytes"]] == len(
+            compact({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
+        )
 
         tool = transport(spans, "mcp.tools/call:checkout")
         wanted = fixture_spans("sdk-mcp-transport-with-handler")[0]["attributes"]
@@ -230,14 +238,17 @@ def test_stateful_http_session_and_sizes() -> None:
 
 
 # Fails if someone loses the JSON-RPC error code (METHOD_NOT_FOUND, or params
-# validation), swallows or rewrites the error the client receives, or marks it
+# validation), sends a method outside the collector's pattern, swallows or rewrites the error the client receives, or marks it
 # other than the contract's fixture does.
 def test_json_rpc_errors_keep_their_code() -> None:
     unknown = {"jsonrpc": "2.0", "id": 2, "method": "no/such"}
     invalid = {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {}}
+    unnamed = {"jsonrpc": "2.0", "id": 4, "method": "bad method!"}
     with recording() as rec:
-        _, answers = stateful_session(rec, [unknown, invalid])
+        _, answers = stateful_session(rec, [unknown, invalid, unnamed])
         spans = rec.spans()
+        # A method the collector would refuse is named in the span only.
+        assert MCP["method"] not in transport(spans, "mcp.bad method!")["attributes"]
         assert answers[1]["error"]["code"] == METHOD_NOT_FOUND
         assert answers[2]["error"]["code"] == INVALID_PARAMS
         wanted = fixture_spans("sdk-mcp-jsonrpc-error")[0]
@@ -328,8 +339,44 @@ def test_failing_redact_is_reported_and_the_call_answers() -> None:
     spans, codes, results = call_with_payloads(redact, "checkout", {"item": "secret-item"})
     assert "ordered secret-item" in repr(results[0])
     assert "secret-item" not in repr(spans)
-    assert "redact_failed" in codes
+    assert "payload_redact_failed" in codes
     assert transport(spans, "mcp.tools/call:checkout")["attributes"][MCP["responseBytes"]] > 0
+
+
+# Fails if a hook that returns something JSON cannot encode sends anything,
+# breaks the call, or is reported under any code but the shared one.
+def test_unencodable_redact_result_is_reported() -> None:
+    spans, codes, results = call_with_payloads(
+        lambda payload: {"request": object()} if payload["method"] == "tools/call" else None, "checkout", {"item": "x"}
+    )
+    assert "ordered x" in repr(results[0])
+    assert (
+        not {MCP["requestPayload"], MCP["responsePayload"]}
+        & transport(spans, "mcp.tools/call:checkout")["attributes"].keys()
+    )
+    assert codes.count("payload_redact_failed") == 1
+
+
+# Fails if a handler that is the step (no middleware) drops the session hash
+# when its function receives the MCPServer Context.
+def test_handler_step_keeps_the_session_hash() -> None:
+    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "whoami", "arguments": {}}}
+    with recording() as rec:
+        session, _ = stateful_session(rec, [call], middleware=False)
+        tool = by_name(rec.spans(), "mcp.tools/call:whoami")
+        assert tool["attributes"]["agentrail.step"] is True
+        assert tool["attributes"][MCP["sessionHash"]] == keyed_hash(HASH_KEY, session)
+        assert_named([tool])
+
+
+# Fails if a later mcp release that moves the connection makes the session
+# read raise into the MCP call instead of sending no hash.
+def test_session_read_fails_soft() -> None:
+    class Bare:
+        session = object()
+
+    with recording() as rec:
+        assert mcp_capture(rec.client)._session_hash(Bare.session) is None  # pyright: ignore[reportPrivateUsage]
 
 
 # Fails if someone lets a result past one export's body limit fail the export

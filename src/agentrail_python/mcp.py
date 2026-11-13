@@ -11,7 +11,8 @@ outcome, message sizes, the calling client and the hashed session::
     server.tool(name="checkout")(capture.tool("checkout", checkout))
 
 The wrappers are optional. Inside the middleware's step a wrapped function is
-its child span, never a second step; without the middleware it is the step.
+its child span, never a second step; without the middleware it is the step,
+with the session hash when the function receives the MCPServer ``Context``.
 
 Arguments, results and prompt text are never recorded unless
 ``capture_payloads`` is set:
@@ -36,6 +37,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from mcp.server.mcpserver import Context
 from mcp.shared.exceptions import MCPError
 from mcp_types import INVALID_PARAMS
 from opentelemetry import context as otel_context
@@ -174,7 +176,7 @@ class McpCapture:
             client=client_name,
             client_version=client_version,
             protocol=_text(getattr(ctx, "protocol_version", None), 64),
-            session_hash=self._session_hash(ctx),
+            session_hash=self._session_hash(getattr(ctx, "session", None)),
         )
         message: dict[str, Any] = {"jsonrpc": "2.0"}
         if request_id is not None:
@@ -248,11 +250,12 @@ class McpCapture:
         span.set_status(StatusCode.ERROR)
         span.set_attribute("error.type", "McpJsonRpcError")
 
-    def _session_hash(self, ctx: Any) -> str | None:
+    def _session_hash(self, session: object) -> str | None:
         # The id the server issued, from the connection: the opening initialize
         # has it before the response header does, and a stateless server, which
-        # issues none, never hashes an id a client made up.
-        connection = getattr(getattr(ctx, "session", None), "_connection", None)
+        # issues none, never hashes an id a client made up. mcp 2.3 has no public
+        # path to it from a ServerSession; if a later release moves it, no hash.
+        connection = getattr(session, "_connection", None)
         session_id = getattr(connection, "session_id", None)
         if not isinstance(session_id, str) or not session_id:
             return None
@@ -281,7 +284,7 @@ class McpCapture:
             request_text = None if request is None else _payload_text(request)
             response_text = None if answer is None else _payload_text(answer)
         except Exception:  # noqa: BLE001 - the application's hook, or what it returned, must never fail the MCP call
-            self._client._report("redact_failed", "traces")  # pyright: ignore[reportPrivateUsage]
+            self._client._report("payload_redact_failed", "traces")  # pyright: ignore[reportPrivateUsage]
             return
         (
             evidence.request_payload,
@@ -290,12 +293,25 @@ class McpCapture:
             evidence.response_truncated,
         ) = _fit_payloads(request_text, response_text)
 
-    def _scope(self, label: str, method: str, kind: str) -> MilestoneScope:
+    def _scope(self, label: str, method: str, kind: str, arguments: tuple[object, ...]) -> MilestoneScope:
         details = MilestoneContext(surface="mcp", kind=kind)
         evidence = McpEvidence(layer="handler", method=method)
         # Inside this client's transport step the handler is its child, not a second step.
         step = _transport.get() is not self._client
+        if step:
+            evidence.session_hash = self._handler_session(arguments)
         return MilestoneScope(self._client, label, details, step=step, mcp=evidence)
+
+    def _handler_session(self, arguments: tuple[object, ...]) -> str | None:
+        """The session hash, when the function receives the MCPServer ``Context``."""
+        for value in arguments:
+            if isinstance(value, Context):
+                try:
+                    session = cast(Context[Any, Any], value).session
+                except ValueError:  # a Context built outside a request
+                    return None
+                return self._session_hash(session)
+        return None
 
     def _wrap(self, method: str, kind: str, name: str, handler: F) -> F:
         label = _span_name(method, name)
@@ -310,7 +326,7 @@ class McpCapture:
 
             @functools.wraps(handler)
             async def run_async(*args: Any, **kwargs: Any) -> Any:
-                async with self._scope(label, method, kind):
+                async with self._scope(label, method, kind, (*args, *kwargs.values())):
                     result = await handler(*args, **kwargs)
                     mark_result(result)
                     return result
@@ -319,7 +335,7 @@ class McpCapture:
 
         @functools.wraps(handler)
         def run(*args: Any, **kwargs: Any) -> Any:
-            with self._scope(label, method, kind):
+            with self._scope(label, method, kind, (*args, *kwargs.values())):
                 result = handler(*args, **kwargs)
                 mark_result(result)
                 return result

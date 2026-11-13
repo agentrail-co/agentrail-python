@@ -36,7 +36,7 @@ CaptureCode = Literal[
     "ignore_failed",
     "identity_outside_request",
     "invalid_performance",
-    "redact_failed",
+    "payload_redact_failed",
     "payload_budget",
 ]
 Signal = Literal["traces", "logs", "context"]
@@ -170,7 +170,8 @@ class CapturePayloads:
     Return the mapping to send (its ``request`` and ``response`` are encoded
     as JSON text; a missing or ``None`` side is not sent), or ``None`` to send
     neither. A hook that raises sends nothing for that message and is
-    reported as ``redact_failed``; the MCP call is unaffected.
+    reported as ``payload_redact_failed``, as is one whose result is not JSON;
+    the MCP call is unaffected.
     """
 
     redact: Callable[[McpPayload], Mapping[str, Any] | None]
