@@ -8,6 +8,7 @@ Attribute names and expected shapes come from the contract's
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -18,7 +19,16 @@ import pytest
 from mcp.client.client import Client as McpClient
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.shared.exceptions import MCPError
-from mcp_types import INVALID_PARAMS, METHOD_NOT_FOUND, CallToolResult, TextContent
+from mcp_types import (
+    INVALID_PARAMS,
+    METHOD_NOT_FOUND,
+    CallToolResult,
+    ElicitRequest,
+    ElicitRequestFormParams,
+    ElicitResult,
+    InputRequiredResult,
+    TextContent,
+)
 
 from agentrail_python import CapturePayloads, McpPayload
 from agentrail_python._handoff import keyed_hash
@@ -99,11 +109,25 @@ def server(capture: Any, *, middleware: bool = True, size: int = 0) -> MCPServer
     app.tool(name="big")(capture.tool("big", big))
     app.resource("catalog://items/sku", name="catalog")(capture.resource("catalog", catalog))
 
+    def ratio() -> float:
+        return 1e-7
+
     def whoami(ctx: Context) -> str:
         return "synthetic"
 
+    def confirm(ctx: Context) -> Any:
+        # A multi-round-trip tool: the SDK seals this state on the wire.
+        if ctx.request_state is None:
+            form = ElicitRequestFormParams(message="ok?", requested_schema={"type": "object", "properties": {}})
+            return InputRequiredResult(
+                input_requests={"ok": ElicitRequest(params=form)}, request_state="plaintext-secret-state"
+            )
+        return "done"
+
     app.prompt(name="greet")(capture.prompt("greet", greet))
     app.tool(name="whoami")(capture.tool("whoami", whoami))
+    app.tool(name="ratio")(capture.tool("ratio", ratio))
+    app.tool(name="confirm")(capture.tool("confirm", confirm))
     return app
 
 
@@ -115,7 +139,12 @@ async def json_rpc(
 
 
 def stateful_session(
-    rec: Any, messages: list[dict[str, Any]], *, middleware: bool = True, requested: str = "2025-06-18"
+    rec: Any,
+    messages: list[dict[str, Any]],
+    *,
+    middleware: bool = True,
+    requested: str = "2025-06-18",
+    sizes: list[int] | None = None,
 ) -> tuple[str, list[Any]]:
     """Initialize a stateful streamable HTTP session behind the ASGI wrapper, then send ``messages``."""
     capture = mcp_capture(rec.client)
@@ -148,7 +177,10 @@ def stateful_session(
                 }
                 await json_rpc(http, headers, {"jsonrpc": "2.0", "method": "notifications/initialized"})
                 for message in messages:
-                    answers.append((await json_rpc(http, headers, message))[1])
+                    response, body = await json_rpc(http, headers, message)
+                    answers.append(body)
+                    if sizes is not None:
+                        sizes.append(len(response.content))
 
     anyio.run(run)
     return session[0], answers
@@ -421,6 +453,101 @@ def test_error_code_past_int32_is_left_out() -> None:
         assert MCP["errorCode"] not in span["attributes"]
         assert span["status"] == 2
         assert span["attributes"]["error.type"] == fixture_spans("sdk-mcp-jsonrpc-error")[0]["attributes"]["error.type"]
+
+
+# Fails if a client's traceparent in _meta (the SDK's own OpenTelemetry
+# middleware continues it) takes the step out of its HTTP request's trace
+# instead of being only a link.
+def test_client_traceparent_is_only_a_link() -> None:
+    remote_trace, remote_span = "ab" * 16, "cd" * 8
+    meta = {"traceparent": f"00-{remote_trace}-{remote_span}-01"}
+    call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "checkout", "arguments": {"item": "x"}, "_meta": meta},
+    }
+    with recording() as rec:
+        stateful_session(rec, [call])
+        spans = rec.spans()
+        tool = transport(spans, "mcp.tools/call:checkout")
+        entries = {span["span_id"]: span["trace_id"] for span in spans if span["name"] == "HTTP POST"}
+        assert tool["parent_span_id"] in entries
+        assert tool["trace_id"] == entries[tool["parent_span_id"]] != remote_trace
+        assert (remote_trace, remote_span) in [(link[0], link[1]) for link in tool["links"]]
+
+
+# Fails if the plaintext multi-round-trip state, which the SDK unseals before
+# and seals after this middleware, reaches the redact hook or an export.
+def test_request_state_never_leaves_in_a_payload() -> None:
+    seen: list[McpPayload] = []
+
+    def redact(payload: McpPayload) -> McpPayload:
+        seen.append(payload)
+        return payload
+
+    async def elicit(context: Any, params: Any) -> ElicitResult:
+        return ElicitResult(action="accept", content={})
+
+    with recording() as rec:
+        app = server(mcp_capture(rec.client, capture_payloads=CapturePayloads(redact=redact)))
+
+        async def run() -> None:
+            async with McpClient(app, elicitation_callback=elicit) as client:
+                assert "done" in repr(await client.call_tool("confirm", {}))
+
+        anyio.run(run)
+        spans = rec.spans()
+        assert len([span for span in transports(spans) if span["name"] == "mcp.tools/call:confirm"]) == 2
+        assert "plaintext-secret-state" not in repr(spans)
+        assert "plaintext-secret-state" not in repr(seen)
+
+
+# Fails if someone runs the redact hook, and copies the payload for it, when
+# the queue's payload budget is already spent, or does not report the loss.
+def test_spent_payload_budget_skips_the_hook() -> None:
+    calls: list[McpPayload] = []
+    with recording() as rec:
+        rec.processors.spans._payload_budget = 0  # pyright: ignore[reportPrivateUsage]
+        capture = mcp_capture(rec.client, capture_payloads=CapturePayloads(redact=lambda p: calls.append(p) or p))
+        app = server(capture)
+
+        async def run() -> None:
+            async with McpClient(app) as client:
+                await client.call_tool("checkout", {"item": "secret-item"})
+
+        anyio.run(run)
+        spans = rec.spans()
+        assert calls == []
+        assert "payload_budget" in rec.codes()
+        assert "secret-item" not in repr(spans)
+
+
+# Fails if a resource URI's userinfo, query or fragment reaches a step name.
+def test_resource_uri_is_named_without_userinfo_query_or_fragment() -> None:
+    with recording() as rec:
+        app = server(mcp_capture(rec.client))
+
+        async def run() -> None:
+            async with McpClient(app) as client:
+                with contextlib.suppress(MCPError):  # no such resource: the step is still named
+                    await client.read_resource("catalog://user:secret-pw@items/sku?token=secret-q#secret-f")
+
+        anyio.run(run)
+        spans = rec.spans()
+        assert transport(spans, "mcp.resources/read:catalog://items/sku")
+        assert "secret" not in repr([span["name"] for span in spans])
+
+
+# Fails if someone measures a message other than as the MCP SDK encodes it on
+# the wire (pydantic's compact JSON: 1e-7, where json.dumps writes 1e-07).
+def test_response_bytes_match_the_wire() -> None:
+    call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "ratio", "arguments": {}}}
+    sizes: list[int] = []
+    with recording() as rec:
+        stateful_session(rec, [call], sizes=sizes)
+        tool = transport(rec.spans(), "mcp.tools/call:ratio")
+        assert tool["attributes"][MCP["responseBytes"]] == sizes[0]
 
 
 # Fails if someone records the negotiated protocol version instead of the one

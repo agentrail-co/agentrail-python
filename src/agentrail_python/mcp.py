@@ -17,7 +17,8 @@ with the session hash when the function receives the MCPServer ``Context``.
 Arguments, results and prompt text are never recorded unless
 ``capture_payloads`` is set:
 ``mcp_capture(agentrail, capture_payloads=CapturePayloads(redact=...))``. A
-step's name carries the requested tool, resource URI or prompt. Client details
+step's name carries the requested tool, prompt or resource URI (without its
+userinfo, query or fragment), with capture off too. Client details
 come from the client and are descriptive only: they never assert an identity.
 
 The session hash is the keyed hash of the ``Mcp-Session-Id`` the server
@@ -26,6 +27,10 @@ issued, on every message of a stateful streamable HTTP session, the opening
 have no session, and send none. The protocol version is the one the message
 carried (its ``_meta``, the ``mcp-protocol-version`` header, or the
 ``initialize`` params), never the negotiated one.
+
+Message sizes are those of the JSON the middleware sees; for a multi-round-trip
+request, whose ``requestState`` the SDK unseals before the middleware and seals
+after it, they are approximate. That state never reaches a payload.
 
 A request the MCP SDK refuses before its middleware runs (a malformed body,
 a wrong ``Accept`` or protocol header, an unknown session) reaches no
@@ -36,7 +41,6 @@ as its HTTP request.
 from __future__ import annotations
 
 import contextvars
-import copy
 import functools
 import inspect
 import json
@@ -52,6 +56,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import Span, StatusCode
 from pydantic import BaseModel, ValidationError
+from pydantic_core import PydanticSerializationError, to_json
 
 from ._client import MilestoneScope
 from ._options import CapturePayloads, McpPayload, MilestoneContext
@@ -94,10 +99,32 @@ def _compact(value: object) -> str:
 
 
 def _byte_length(message: object) -> int | None:
+    """Compact JSON's UTF-8 length, encoded once, as pydantic encodes the SDK's wire."""
     try:
-        return len(_compact(message).encode("utf-8", "surrogatepass"))
-    except (TypeError, ValueError):  # not JSON: a later middleware's own result object
+        return len(to_json(message))
+    except PydanticSerializationError:  # not JSON: a later middleware's own object, or a lone surrogate
         return None
+
+
+def _bare_uri(uri: str) -> str:
+    """A resource URI without its userinfo, query or fragment."""
+    uri = uri.split("#", 1)[0].split("?", 1)[0]
+    scheme, separator, rest = uri.partition("://")
+    if not separator:
+        return uri
+    authority, slash, path = rest.partition("/")
+    return f"{scheme}://{authority.rpartition('@')[2]}{slash}{path}"
+
+
+def _without_state(value: object) -> object:
+    """Without a multi-round-trip ``requestState``: the SDK seals it on the wire,
+    and this middleware sees it in plaintext."""
+    if not isinstance(value, dict):
+        return value
+    fields = cast(dict[str, object], value)
+    if "requestState" not in fields:
+        return fields
+    return {key: item for key, item in fields.items() if key != "requestState"}
 
 
 def _payload_text(value: object) -> str:
@@ -198,6 +225,8 @@ class McpCapture:
         target = None
         if method in _TARGETS and params is not None:
             value = params.get(_TARGETS[method])
+            if isinstance(value, str) and method == "resources/read":
+                value = _bare_uri(value)
             target = value if isinstance(value, str) and value else None
         request_id = ctx.request_id
         client_name, client_version = _client_details(ctx, method, params)
@@ -309,20 +338,25 @@ class McpCapture:
         params: Mapping[str, Any] | None,
         response: object,
     ) -> None:
-        payload: McpPayload = {
-            "method": method,
-            "name": name,
-            "request": None if params is None else copy.deepcopy(dict(params)),
-            "response": copy.deepcopy(response),
-        }
+        if not self._client._payload_room():  # pyright: ignore[reportPrivateUsage]
+            # The queue would drop these payloads: neither copy nor redact them.
+            self._client._report("payload_budget", "traces")  # pyright: ignore[reportPrivateUsage]
+            return
         try:
+            # JSON copies, never the live objects the SDK still answers with.
+            payload: McpPayload = {
+                "method": method,
+                "name": name,
+                "request": None if params is None else _without_state(json.loads(_compact(dict(params)))),
+                "response": None if response is None else _without_state(json.loads(_compact(response))),
+            }
             chosen = settings.redact(payload)
             if chosen is None:
                 return
             request, answer = chosen.get("request"), chosen.get("response")
             request_text = None if request is None else _payload_text(request)
             response_text = None if answer is None else _payload_text(answer)
-        except Exception:  # noqa: BLE001 - the application's hook, or what it returned, must never fail the MCP call
+        except Exception:  # noqa: BLE001 - the application's hook, what it returned, or a non-JSON result never fails the MCP call
             self._client._report("payload_redact_failed", "traces")  # pyright: ignore[reportPrivateUsage]
             return
         (

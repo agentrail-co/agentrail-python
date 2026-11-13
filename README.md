@@ -90,7 +90,9 @@ With the official `mcp` SDK, add the middleware first. Each JSON-RPC message
 your server receives becomes a step: its method, outcome and JSON-RPC error
 code, message sizes, the calling client and, on stateful streamable HTTP, a
 keyed hash of the session ID (the opening `initialize` included). Wrapped
-tools, resources and prompts are child spans of that step.
+tools, resources and prompts are child spans of that step. Step names carry
+the tool, the prompt and the requested resource URI (without its userinfo,
+query or fragment), with payload capture off too.
 
 ```python
 from mcp.server.mcpserver import MCPServer
@@ -118,8 +120,9 @@ def redact(payload: ar.McpPayload):
 capture = mcp_capture(agentrail, capture_payloads=ar.CapturePayloads(redact=redact))
 ```
 
-A span's two payloads are cut together to 14 MiB, the longer first, and
-flagged; nothing shorter is cut. A request the MCP SDK refuses before its
+When a span's two payloads together pass 14 MiB, they are cut to fit on a
+character boundary, the longer first (both, when each passes half), and each
+cut side is flagged. A multi-round-trip `requestState` is never sent. A request the MCP SDK refuses before its
 middleware runs (a malformed body, a wrong header, an unknown session) is no
 MCP step; behind `agentrail.asgi` it is still recorded as its HTTP request.
 

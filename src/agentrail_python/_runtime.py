@@ -11,7 +11,7 @@ from typing import Literal
 from opentelemetry import context as otel_context
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
-from opentelemetry.trace import Link
+from opentelemetry.trace import Link, SpanContext
 from opentelemetry.util.types import AttributeValue
 
 from ._handoff import key_id, keyed_hash
@@ -29,6 +29,8 @@ class RequestState:
     verified: bool = False
     links: list[Link] = field(default_factory=lambda: [])
     location: Attributes = field(default_factory=lambda: {})
+    entry: SpanContext | None = None
+    """The managed entry's span: what a milestone nests under, whatever a library continued."""
     _identity: Attributes | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 

@@ -170,6 +170,11 @@ class ExportQueue(Generic[T]):
             self._report("payload_budget", 1)
         return True
 
+    def payload_room(self) -> bool:
+        """False once the payload budget is spent: a new payload would be dropped."""
+        with self._lock:
+            return self._payload < self._payload_budget
+
     def flush(self, timeout: float | None = None) -> None:
         """Attempts every record accepted when called. Delivery is not guaranteed."""
         limit = self._options.flush_timeout if timeout is None else min(timeout, self._options.flush_timeout)
