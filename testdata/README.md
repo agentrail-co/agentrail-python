@@ -4,11 +4,12 @@ Copied, never edited here. Update them where they are made and copy them again.
 
 - `sdk-contract.json` is copied byte for byte from Argus
   `apps/api/sdk-contract.json` at commit
-  `ddb046d7fb5a884724e0f62fdf4441c64dee452c` (SHA-256
-  `6a0b1e13d364da92831ba495b30a42ae0c1da7119c771e4b4a11a2e93743f498`). It includes
-  `otlp.mcpAttributes`, `otlp.mcpSpans`, `otlp.limits.mcpPayloadBytes` and
-  `exportBatchBytes`, the standard MCP naming attributes, `tool_error`, and
-  the `sdk-mcp-*` fixtures. It is written by Argus's
+  `78f9621d4673eab0f3e454575b98903352ee02f6` (SHA-256
+  `a25284880b58df53e19d2c2854cbe1bc66defb6349f7c9b96009c975ac628a19`). It includes
+  `otlp.mcpAttributes`, `otlp.mcpSpans` (a tool whose handler raised is a
+  failed call, with its type, ranked before `tool_error`),
+  `otlp.limits.mcpPayloadBytes` and `exportBatchBytes`, the standard MCP naming
+  attributes, `tool_error`, and the `sdk-mcp-*` fixtures. It is written by Argus's
   `apps/api/test/sdk-contract.test.ts`.
 - `interoperability/contract.json`, `javascript.json` and `markers.json` are
   copied from agentrail-go `testdata/interoperability/` at `ad62f2b34c71143de38388236cff431013d1227e`. Its

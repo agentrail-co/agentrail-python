@@ -3,7 +3,7 @@
     "Performance evidence requires source-granted operation permissions and an explicit operation hash/key ID. A resend cannot add or change evidence; the first authenticated producer is retained. Plugin calls without an operation reference remain unassigned. Unknown package releases are never replaced by the latest package.",
     "Location is an annotation: a resent event retains its first stored actor.location even when a later lookup differs. Other event facts must match.",
     "What the Argus collector takes and how its engine reads a marker. Written by apps/api/test/sdk-contract.test.ts in argus.",
-    "ingestRequest is the body of POST /ingest/events; browserCall is the body of POST /ingest/browser; browserPayloadCall is the body of POST /ingest/browser/payloads, one WebMCP tool run with the content its page captured, sent as JSON text while the page is open (at most 16 MiB; a payload is truncated only when it cannot fit, its truncated flag set).",
+    "ingestRequest is the body of POST /ingest/events; browserCall is the body of POST /ingest/browser; browserPayloadCall is the body of POST /ingest/browser/payloads?key=<the public key of a browser source>, one WebMCP tool run with the content its page captured, sent as JSON text while the page is open. The key is in the query, never the body, and is checked before the body is read; a call is at most 1 MiB, and a payload is truncated only when the call cannot fit otherwise, its truncated flag set.",
     "A WebMCP tool run (kind agent.tool.executed) carries webmcp: the tool name (null where it does not match http.tool's pattern), how it ended (answered, threw, or is_error for a result that said it failed), and the JSON size of its arguments and result. Never their content, except in browserPayloadCall.",
     "The schemas are what the collector stores. It does not refuse a call for a field they do not name: it removes the field, stores none of it and counts it on the call. Anything else they do not allow, a new value of a field they name included, refuses the call.",
     "The collector also refuses what these schemas cannot say: an event timed more than 30 days before its call arrives, or more than a day after; an event carrying a hashed address, principal or registration in a call whose component names no hashKeyId; a fingerprint naming more than 64 components, or with a component nested more than 32 levels deep; and a string or field name anywhere in a body holding a NUL (U+0000) or half a surrogate pair.",
@@ -2274,11 +2274,6 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "properties": {
-      "key": {
-        "type": "string",
-        "minLength": 32,
-        "maxLength": 128
-      },
       "component": {
         "type": "object",
         "properties": {
@@ -2790,7 +2785,6 @@
       }
     },
     "required": [
-      "key",
       "component",
       "tab",
       "event",
@@ -3145,7 +3139,7 @@
                 "surface": "mcp",
                 "kind": "tool.call",
                 "session": {
-                  "id": "mcp:dddddddddddddddddddddddddddddddd",
+                  "id": "mcp:dddddddddddddddddddddddddddddddd:20760",
                   "previousId": null
                 },
                 "content": {
@@ -4008,8 +4002,8 @@
     },
     "mcpSpans": {
       "name": "Transport span: mcp.<method>, or mcp.<method>:<name> for tools/call, resources/read and prompts/get (the tool, the requested resource URI without its userinfo, query or fragment, the prompt), at most 256 UTF-16 units; with no name, mcp.<method> and no colon. Handler span: mcp.<method>:<the name the tool, resource or prompt was registered under>.",
-      "transport": "One span per JSON-RPC message the server received, set as a step (agentrail.step true, agentrail.step.surface mcp, agentrail.step.kind tool.call for tools/call and mcp.<method> otherwise), with layer transport. protocol.version is what that message carried (its _meta, the mcp-protocol-version header, or for initialize its params), never a negotiated value; client.name and client.version are the message's own _meta clientInfo where it carries one, else what the client declared in its initialize. ERROR status for a JSON-RPC error answer, whatever raised it (jsonrpc.error_code set to the code on the wire when it is a 32-bit integer, -2147483648 to 2147483647, and omitted otherwise: the collector refuses an export carrying one outside that range), a tool result with isError (result.is_error true), or a request the transport refused with an HTTP status of 400 or more and no JSON-RPC answer.",
-      "errorTypes": "error.type on an ERROR span: McpJsonRpcError for a JSON-RPC error answer, tool_error for a tool result with isError (older SDKs used McpOperationError or mcp.toolResultError, which remain supported), McpTransportRejected for a request refused with no JSON-RPC answer, otherwise the thrown error's own type name.",
+      "transport": "One span per JSON-RPC message the server received, set as a step (agentrail.step true, agentrail.step.surface mcp, agentrail.step.kind tool.call for tools/call and mcp.<method> otherwise), with layer transport. protocol.version is what that message carried (its _meta, the mcp-protocol-version header, or for initialize its params), never a negotiated value; client.name and client.version are the message's own _meta clientInfo where it carries one, else what the client declared in its initialize. ERROR status for a JSON-RPC error answer, whatever raised it (jsonrpc.error_code set to the code on the wire when it is a 32-bit integer, -2147483648 to 2147483647, and omitted otherwise: the collector refuses an export carrying one outside that range), a tool result with isError (result.is_error true), a tool whose handler threw (error.type the thrown error's own type name, result.is_error kept true where the server answered the throw with an isError result of its own), or a request the transport refused with an HTTP status of 400 or more and no JSON-RPC answer.",
+      "errorTypes": "error.type on an ERROR span: McpJsonRpcError for a JSON-RPC error answer, tool_error for a tool result with isError (older SDKs used McpOperationError or mcp.toolResultError, which remain supported), McpTransportRejected for a request refused with no JSON-RPC answer, otherwise the thrown error's own type name. The collector reads a call's outcome in this order, the first that says one winning: a JSON-RPC error code (error); an ERROR span whose error.type is none of the tool-error names, a handler that threw (error); result.is_error true, or an ERROR span with a tool-error name (tool_error); an HTTP status of 400 or more (error). A thrown tool is a failed call, a result marked isError a failed result.",
       "standardNames": "mcp.method.name on transport and handler spans; gen_ai.tool.name for tools/call and gen_ai.prompt.name for prompts/get, using the requested name on transport spans and the registered name on handler spans, bounded to 256 UTF-16 units. Resources have no name attribute: mcp.resource.uri is omitted.",
       "handler": "A tool, resource or prompt callback inside a transport span: its child, layer handler, and no step (no agentrail.step). Alone, as an SDK without the transport wrapper sends it, it is the step itself and carries what a transport span would where the callback can see it: client name, version and protocol, session.id_hash, and result.is_error for a tools/call result with isError.",
       "sizes": "request.bytes and response.bytes are the UTF-8 length of the JSON-RPC message as the SDK encodes it, without whitespace.",
