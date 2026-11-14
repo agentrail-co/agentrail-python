@@ -252,6 +252,49 @@ def test_one_step_per_message_and_no_content_by_default() -> None:
             assert secret not in repr(spans)
 
 
+class SyntheticToolError(Exception):
+    """A tool's own exception, named so its type is plain to see."""
+
+
+# Fails if someone stops telling the transport step that its tool raised:
+# MCPServer answers the exception with an isError result of its own, so the
+# step would say tool_error, a failed result, for a failed call. Or if someone
+# marks a result the tool returned with isError, raising nothing, as more than
+# tool_error.
+def test_raising_tool_is_a_failed_call_on_its_transport_step() -> None:
+    with recording() as rec:
+        app = server(mcp_capture(rec.client))
+        capture = mcp_capture(rec.client)
+
+        def broken(q: str) -> str:
+            raise SyntheticToolError("private raised text")
+
+        app.tool(name="broken")(capture.tool("broken", broken))
+        answers: list[Any] = []
+
+        async def run() -> None:
+            async with McpClient(app) as client:
+                answers.append(await client.call_tool("broken", {"q": "x"}))
+                answers.append(await client.call_tool("refund", {"order": "o-1"}))
+
+        anyio.run(run)
+        # MCPServer answered the exception itself, as a result that says isError.
+        assert [answer.is_error for answer in answers] == [True, True]
+        spans = rec.spans()
+        call = transport(spans, "mcp.tools/call:broken")
+        assert call["status"] == 2
+        assert (
+            call["attributes"].items()
+            >= {"agentrail.step": True, MCP["isError"]: True, "error.type": "SyntheticToolError"}.items()
+        )
+        handler = [span for span in spans if span["parent_span_id"] == call["span_id"]]
+        assert len(handler) == 1 and handler[0]["status"] == 2
+        assert handler[0]["attributes"]["error.type"] == "SyntheticToolError"
+        refund = transport(spans, "mcp.tools/call:refund")
+        assert refund["status"] == 2
+        assert refund["attributes"][MCP["isError"]] is True and refund["attributes"]["error.type"] == "tool_error"
+
+
 # Fails if someone drops the session hash on stateful streamable HTTP (the
 # opening initialize included), hashes it with anything but the principal hash,
 # sends it without the resource's key ID (the contract's refused

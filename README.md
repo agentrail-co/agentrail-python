@@ -94,6 +94,11 @@ tools, resources and prompts are child spans of that step. Step names carry
 the tool, the prompt and the requested resource URI (without its userinfo,
 query or fragment), with payload capture off too.
 
+A wrapped tool that raises is a failed call: `MCPServer` answers the exception
+with an `isError` result of its own, and the step keeps `isError` but carries
+the exception's type. A result your tool returns with `isError` is a failed
+result (`tool_error`).
+
 ```python
 from mcp.server.mcpserver import MCPServer
 from agentrail_python.mcp import mcp_capture

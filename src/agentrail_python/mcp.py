@@ -46,6 +46,7 @@ import inspect
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.server.mcpserver import Context
@@ -75,9 +76,23 @@ _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
 _PAYLOAD_BYTES = 14 * 1024 * 1024
 """One span's two payloads together: the contract's ``otlp.limits.mcpPayloadBytes``."""
 
-_transport: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+
+@dataclass
+class _TransportCall:
+    """The transport step a wrapped function runs inside, told when the function raises."""
+
+    client: object
+    thrown: str | None = None
+    """The type of what a wrapped function inside it raised; None while none has."""
+
+
+_transport: contextvars.ContextVar[_TransportCall | None] = contextvars.ContextVar(
     "agentrail_python_mcp_transport", default=None
 )
+
+
+def _error_type(error: BaseException) -> str:
+    return bounded(type(error).__qualname__, 4096)
 
 
 def _text(value: object, limit: int) -> str | None:
@@ -260,7 +275,8 @@ class McpCapture:
             mcp=evidence,
         )
         token = otel_context.attach(context)
-        inside = _transport.set(self._client)
+        call = _TransportCall(self._client)
+        inside = _transport.set(call)
         response: object = None
         try:
             try:
@@ -290,8 +306,13 @@ class McpCapture:
                 evidence.response_bytes = _byte_length({"jsonrpc": "2.0", "id": request_id, "result": wire})
             if method == "tools/call" and _is_error(wire):
                 evidence.is_error = True
+            # A wrapped function that raised is a failed call, though MCPServer
+            # answered it with an isError result of its own (is_error stays);
+            # a result the function returned with isError is a failed result.
+            failure = call.thrown or ("tool_error" if evidence.is_error else None)
+            if failure is not None:
                 span.set_status(StatusCode.ERROR)
-                span.set_attribute("error.type", "tool_error")
+                span.set_attribute("error.type", failure)
             return result
         finally:
             _transport.reset(inside)
@@ -303,7 +324,12 @@ class McpCapture:
                 otel_context.detach(token)
 
     def tool(self, name: str, handler: F) -> F:
-        """Wrap a tool function. A result with ``isError`` marks the span failed."""
+        """Wrap a tool function. A result with ``isError`` marks the span failed.
+
+        Inside the middleware's step, a function that raises makes the step a
+        failed call with the exception's type, though MCPServer answers it with
+        an ``isError`` result: a failed result is one the function returned.
+        """
         return self._wrap("tools/call", "tool.call", name, handler)
 
     def resource(self, name: str, handler: F) -> F:
@@ -316,7 +342,7 @@ class McpCapture:
 
     def _failed(self, span: Span, error: BaseException) -> None:
         span.set_status(StatusCode.ERROR)
-        span.set_attribute("error.type", bounded(type(error).__qualname__, 4096))
+        span.set_attribute("error.type", _error_type(error))
 
     def _json_rpc_error(
         self, span: Span, evidence: McpEvidence, request_id: object, error: dict[str, Any], code: int
@@ -378,15 +404,17 @@ class McpCapture:
 
     def _scope(
         self, label: str, method: str, kind: str, name: str, arguments: tuple[object, ...]
-    ) -> tuple[MilestoneScope, McpEvidence | None]:
-        """The handler's span, and its evidence when it is the step."""
+    ) -> tuple[MilestoneScope, McpEvidence | None, _TransportCall | None]:
+        """The handler's span, its evidence when it is the step, and else the transport step it runs inside."""
         details = MilestoneContext(surface="mcp", kind=kind, mcp=McpContext(method=method, name=name))
         evidence = McpEvidence(layer="handler", method=method)
         # Inside this client's transport step the handler is its child, not a second step.
-        step = _transport.get() is not self._client
-        if step:
+        call = _transport.get()
+        inside = call if call is not None and call.client is self._client else None
+        if inside is None:
             self._handler_details(evidence, arguments)
-        return MilestoneScope(self._client, label, details, step=step, mcp=evidence), evidence if step else None
+        scope = MilestoneScope(self._client, label, details, step=inside is None, mcp=evidence)
+        return scope, evidence if inside is None else None, inside
 
     def _handler_details(self, evidence: McpEvidence, arguments: tuple[object, ...]) -> None:
         """As the step, what a transport span would carry, when the function receives
@@ -415,13 +443,23 @@ class McpCapture:
                 # The OpenTelemetry MCP convention's name for a failed tool result.
                 span.set_attribute("error.type", "tool_error")
 
+        def raised(call: _TransportCall | None, error: Exception) -> None:
+            # The scope marks this function's own span; its transport step is told
+            # too, since MCPServer answers a raising tool with an isError result.
+            if call is not None:
+                call.thrown = _error_type(error)
+
         if inspect.iscoroutinefunction(handler):
 
             @functools.wraps(handler)
             async def run_async(*args: Any, **kwargs: Any) -> Any:
-                scope, evidence = self._scope(label, method, kind, name, (*args, *kwargs.values()))
+                scope, evidence, call = self._scope(label, method, kind, name, (*args, *kwargs.values()))
                 async with scope:
-                    result = await handler(*args, **kwargs)
+                    try:
+                        result = await handler(*args, **kwargs)
+                    except Exception as error:
+                        raised(call, error)
+                        raise
                     mark_result(result, evidence)
                     return result
 
@@ -429,9 +467,13 @@ class McpCapture:
 
         @functools.wraps(handler)
         def run(*args: Any, **kwargs: Any) -> Any:
-            scope, evidence = self._scope(label, method, kind, name, (*args, *kwargs.values()))
+            scope, evidence, call = self._scope(label, method, kind, name, (*args, *kwargs.values()))
             with scope:
-                result = handler(*args, **kwargs)
+                try:
+                    result = handler(*args, **kwargs)
+                except Exception as error:
+                    raised(call, error)
+                    raise
                 mark_result(result, evidence)
                 return result
 
