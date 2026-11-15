@@ -4,10 +4,13 @@ Copied, never edited here. Update them where they are made and copy them again.
 
 - `sdk-contract.json` is copied byte for byte from Argus
   `apps/api/sdk-contract.json` at commit
-  `78f9621d4673eab0f3e454575b98903352ee02f6` (SHA-256
-  `a25284880b58df53e19d2c2854cbe1bc66defb6349f7c9b96009c975ac628a19`). It includes
+  `9625ffe6e2b60cd539a8fbd18445273d437c93fd` (SHA-256
+  `20adfff8a062274d104e9251e36834c3ef1b92821b03fc0a5d44ad86070afcba`). It includes
   `otlp.mcpAttributes`, `otlp.mcpSpans` (a tool whose handler raised is a
-  failed call, with its type, ranked before `tool_error`),
+  failed call, with its type, ranked before `tool_error`; `requestFacts`, what
+  a step says of the HTTP request that carried its message),
+  `otlp.mcpRequestFacts` (two recorded requests, Claude Code 2.1.318 and Codex
+  0.166.0, and the attributes an SDK sends for each), `otlp.headerNames`,
   `otlp.limits.mcpPayloadBytes` and `exportBatchBytes`, the standard MCP naming
   attributes, `tool_error`, and the `sdk-mcp-*` fixtures. It is written by Argus's
   `apps/api/test/sdk-contract.test.ts`.
