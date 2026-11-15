@@ -13,6 +13,7 @@ from opentelemetry import context as otel_context
 from opentelemetry.trace import Span, StatusCode
 
 from ._options import IncomingRequest
+from ._runtime import REQUEST_FACTS, RequestFacts
 
 if TYPE_CHECKING:
     from ._client import Client
@@ -114,10 +115,17 @@ class AgentrailWSGIMiddleware:
         self._client = client
 
     def __call__(self, environ: dict[str, Any], start_response: StartResponse) -> Iterable[bytes]:
-        entered = self._client._enter(_request(environ))  # pyright: ignore[reportPrivateUsage]
+        request = _request(environ)
+        entered = self._client._enter(request)  # pyright: ignore[reportPrivateUsage]
         if entered is None:
             return self.app(environ, start_response)
         span, ctx = entered
+        # WSGI keeps neither the order nor the case of header names, and moves two
+        # of them out of HTTP_*: the names are rebuilt (with content-type,
+        # content-length and host) lower-cased and sorted. For the MCP steps this
+        # request carries (mcp.py); no other span reads it.
+        names = tuple(sorted(request.headers))
+        ctx = otel_context.set_value(REQUEST_FACTS, RequestFacts.of(request, names), ctx)
         status: list[int] = []
         ended = threading.Lock()
 

@@ -28,6 +28,14 @@ have no session, and send none. The protocol version is the one the message
 carried (its ``_meta``, the ``mcp-protocol-version`` header, or the
 ``initialize`` params), never the negotiated one.
 
+Behind ``agentrail.asgi`` or ``agentrail.wsgi``, a step whose message came by
+HTTP also carries that request's method, URL (its query cut to Agentrail's
+markers), user agent, header names (never a value), ``Accept`` and
+``Accept-Encoding``, and the message's JSON-RPC id. ASGI gives the names in the
+order they arrived; WSGI keeps no order, so they are sorted. A message over
+stdio, or from an in-memory client, carries none. A wrapped function that is
+the step carries them when it receives the ``Context``.
+
 Message sizes are those of the JSON the middleware sees; for a multi-round-trip
 request, whose ``requestState`` the SDK unseals before the middleware and seals
 after it, they are approximate. That state never reaches a payload.
@@ -61,8 +69,8 @@ from pydantic_core import PydanticSerializationError, to_json
 
 from ._client import MilestoneScope
 from ._options import CapturePayloads, McpContext, McpPayload, MilestoneContext
-from ._runtime import McpEvidence
-from ._text import bounded, well_formed
+from ._runtime import REQUEST_FACTS, McpEvidence, RequestFacts
+from ._text import bounded, valid_text, well_formed
 
 if TYPE_CHECKING:
     from ._client import Client
@@ -73,6 +81,8 @@ F = TypeVar("F", bound=Callable[..., Any])
 _METHOD = re.compile(r"[A-Za-z0-9_./-]{1,128}")
 _TARGETS = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
 _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
+_ID_UNITS = 128
+"""The longest JSON-RPC id the collector takes."""
 _PAYLOAD_BYTES = 14 * 1024 * 1024
 """One span's two payloads together: the contract's ``otlp.limits.mcpPayloadBytes``."""
 
@@ -223,6 +233,28 @@ def _carried_protocol(ctx: Any, method: str, params: Mapping[str, Any] | None) -
     return _text(cast(Mapping[str, object], headers).get("mcp-protocol-version"), 64)
 
 
+def _jsonrpc_id(request_id: object) -> str | None:
+    """The id as text (a number in decimal); None on a notification, or past what the collector takes."""
+    if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+        return None
+    text = str(request_id)
+    return text if text and valid_text(text, _ID_UNITS) else None
+
+
+def _carried_by(evidence: McpEvidence, http_request: object, request_id: object) -> None:
+    """The HTTP request that carried the message, as the ASGI or WSGI wrapper recorded it.
+
+    ``http_request`` is the SDK's own record of that request, None for a message
+    that came by none (stdio, in memory), though it is handled inside one.
+    """
+    if http_request is None:
+        return
+    facts = otel_context.get_value(REQUEST_FACTS)
+    if isinstance(facts, RequestFacts):
+        evidence.request = facts
+        evidence.jsonrpc_id = _jsonrpc_id(request_id)
+
+
 def _answered_error(ctx: Any, error: Exception) -> dict[str, Any]:
     """The JSON-RPC error the SDK answers an ordinary exception with, as its dispatchers do."""
     if getattr(ctx, "protocol_version", None) in MODERN_PROTOCOL_VERSIONS:
@@ -261,6 +293,7 @@ class McpCapture:
             protocol=_carried_protocol(ctx, method, params),
             session_hash=self._session_hash(getattr(ctx, "session", None)),
         )
+        _carried_by(evidence, ctx.request, request_id)
         message: dict[str, Any] = {"jsonrpc": "2.0"}
         if request_id is not None:
             message["id"] = request_id
@@ -418,7 +451,8 @@ class McpCapture:
 
     def _handler_details(self, evidence: McpEvidence, arguments: tuple[object, ...]) -> None:
         """As the step, what a transport span would carry, when the function receives
-        the MCPServer ``Context``: client details, protocol version and session."""
+        the MCPServer ``Context``: client details, protocol version, session and
+        the HTTP request that carried the message."""
         for value in arguments:
             if isinstance(value, Context):
                 try:
@@ -429,6 +463,7 @@ class McpCapture:
                 evidence.client, evidence.client_version = _client_details(request, request.method, params)
                 evidence.protocol = _carried_protocol(request, request.method, params)
                 evidence.session_hash = self._session_hash(request.session)
+                _carried_by(evidence, request.request, request.request_id)
                 return
 
     def _wrap(self, method: str, kind: str, name: str, handler: F) -> F:

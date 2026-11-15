@@ -41,6 +41,17 @@ MCP = OTLP["mcpAttributes"]
 NAMED = {*OTLP["spanAttributes"].values(), *MCP.values(), *OTLP["locationAttributes"].values()}
 ACCEPTED = {fixture["name"]: fixture for fixture in OTLP["fixtures"]["accepted"]}
 HEADERS = {"accept": "application/json, text/event-stream", "content-type": "application/json"}
+# What a step behind the ASGI wrapper also carries of the HTTP request that
+# carried its message (test_mcp_request_facts.py replays the recorded ones).
+CARRIED = {
+    "http.request.method",
+    "url.full",
+    "user_agent.original",
+    MCP["headerNames"],
+    MCP["accept"],
+    MCP["acceptEncoding"],
+    MCP["jsonrpcId"],
+}
 
 
 def fixture_spans(name: str) -> list[dict[str, Any]]:
@@ -322,10 +333,13 @@ def test_stateful_http_session_and_sizes() -> None:
         assert notified["attributes"][MCP["requestBytes"]] == len(
             compact({"jsonrpc": "2.0", "method": "notifications/initialized"}).encode()
         )
+        # Fails if a notification, which has no id, is sent one ("None").
+        assert notified["attributes"][MCP["headerNames"]] and MCP["jsonrpcId"] not in notified["attributes"]
 
         tool = transport(spans, "mcp.tools/call:checkout")
         wanted = fixture_spans("sdk-mcp-transport-with-handler")[0]["attributes"]
-        assert tool["attributes"].keys() == wanted.keys()
+        assert tool["attributes"].keys() == wanted.keys() | CARRIED
+        assert tool["attributes"][MCP["jsonrpcId"]] == "2"
         assert tool["attributes"][MCP["sessionHash"]] == expected
         assert tool["attributes"][MCP["requestBytes"]] == len(compact(call).encode())
         assert tool["attributes"][MCP["responseBytes"]] == len(compact(answers[1]).encode())
@@ -362,7 +376,7 @@ def test_json_rpc_errors_keep_their_code() -> None:
             assert span["status"] == wanted["status"]
             assert span["attributes"]["error.type"] == wanted["attributes"]["error.type"]
         # Invalid params name no tool, unlike the fixture's unknown named tool.
-        assert transport(spans, "mcp.tools/call")["attributes"].keys() == wanted["attributes"].keys() - {
+        assert transport(spans, "mcp.tools/call")["attributes"].keys() == (wanted["attributes"].keys() | CARRIED) - {
             MCP["toolName"]
         }
         assert_named(spans)
@@ -468,8 +482,9 @@ def test_unencodable_redact_result_is_reported() -> None:
     assert codes.count("payload_redact_failed") == 1
 
 
-# Fails if a handler that is the step (no middleware) drops the session hash
-# when its function receives the MCPServer Context.
+# Fails if a handler that is the step (no middleware) drops the session hash,
+# or the HTTP request that carried its message, when its function receives the
+# MCPServer Context.
 def test_handler_step_keeps_the_session_hash() -> None:
     call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "whoami", "arguments": {}}}
     with recording() as rec:
@@ -485,8 +500,13 @@ def test_handler_step_keeps_the_session_hash() -> None:
                 MCP["toolName"]: "whoami",
                 MCP["clientVersion"]: "1.0.0",
                 MCP["protocolVersion"]: "2025-06-18",
+                "http.request.method": "POST",
+                "url.full": "http://localhost:8000/mcp",
+                MCP["accept"]: HEADERS["accept"],
+                MCP["jsonrpcId"]: "2",
             }.items()
         )
+        assert "mcp-session-id" in tool["attributes"][MCP["headerNames"]].split(",")
         assert_named([tool])
 
 

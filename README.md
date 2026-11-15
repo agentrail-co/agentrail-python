@@ -111,6 +111,15 @@ server.tool(name="checkout")(capture.tool("checkout", checkout))
 app = agentrail.asgi(server.streamable_http_app())
 ```
 
+Behind `agentrail.asgi` (or `agentrail.wsgi`), a step whose message came by
+HTTP also carries that request's method, URL (its query cut to Agentrail's
+markers), user agent, header names (never a value), `Accept` and
+`Accept-Encoding` (each only when the request sent one), and the message's
+JSON-RPC id. ASGI gives the names in the order they arrived; WSGI keeps no
+order, so they are sent lower-cased and sorted. A message over stdio, or from
+an in-memory client, carries none; a wrapped function that is the step carries
+them when it receives the `Context`.
+
 Arguments and results are off by default. To send them, pass a redact hook; it
 gets copies of `method`, `name`, `request` and `response` and returns what to
 send, or `None` to send nothing:

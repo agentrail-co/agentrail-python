@@ -11,6 +11,7 @@ from opentelemetry import context as otel_context
 from opentelemetry.trace import StatusCode
 
 from ._options import IncomingRequest
+from ._runtime import REQUEST_FACTS, RequestFacts
 
 if TYPE_CHECKING:
     from ._client import Client
@@ -53,6 +54,12 @@ def _request(scope: Scope) -> IncomingRequest:
     )
 
 
+def _header_names(scope: Scope) -> tuple[str, ...]:
+    """The names as the server received them: ASGI keeps their order and repeats
+    (lower-cased by the servers that lower-case). Never a value."""
+    return tuple(bytes(name).decode("latin-1") for name, _ in scope.get("headers", ()))
+
+
 def _route(scope: Scope) -> str | None:
     route = scope.get("route")
     for attribute in ("path_format", "path"):
@@ -77,11 +84,14 @@ class AgentrailASGIMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        entered = self._client._enter(_request(scope))  # pyright: ignore[reportPrivateUsage]
+        request = _request(scope)
+        entered = self._client._enter(request)  # pyright: ignore[reportPrivateUsage]
         if entered is None:
             await self.app(scope, receive, send)
             return
         span, ctx = entered
+        # For the MCP steps this request carries (mcp.py); no other span reads it.
+        ctx = otel_context.set_value(REQUEST_FACTS, RequestFacts.of(request, _header_names(scope)), ctx)
         status: list[int] = []
 
         async def observed_send(message: Message) -> None:

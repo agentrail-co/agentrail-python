@@ -15,7 +15,15 @@ from opentelemetry.trace import Link, SpanContext
 from opentelemetry.util.types import AttributeValue
 
 from ._handoff import key_id, keyed_hash
-from ._options import CaptureCode, CaptureError, MilestoneContext, Resolved, Signal, VerifiedIdentity
+from ._options import (
+    CaptureCode,
+    CaptureError,
+    IncomingRequest,
+    MilestoneContext,
+    Resolved,
+    Signal,
+    VerifiedIdentity,
+)
 from ._version import VERSION
 
 COMPONENT = "agentrail-python"
@@ -47,6 +55,38 @@ class RequestState:
             return self._identity != identity
 
 
+@dataclass(frozen=True)
+class RequestFacts:
+    """The HTTP request that carried an MCP message, as its step reports it.
+
+    Header names only, never a value: as the server received them where it
+    keeps them (ASGI), rebuilt where it does not (WSGI). The sanitized copy
+    decides what of it leaves (``_privacy``).
+    """
+
+    method: str
+    url: str
+    user_agent: str | None
+    header_names: tuple[str, ...]
+    accept: str | None
+    accept_encoding: str | None
+
+    @classmethod
+    def of(cls, request: IncomingRequest, header_names: tuple[str, ...]) -> RequestFacts:
+        return cls(
+            method=request.method,
+            url=f"{request.scheme}://{request.host}{request.target}",
+            user_agent=request.headers.get("user-agent") or None,
+            header_names=header_names,
+            accept=request.headers.get("accept") or None,
+            accept_encoding=request.headers.get("accept-encoding") or None,
+        )
+
+
+REQUEST_FACTS = otel_context.create_key("agentrail.http.request_facts")
+"""Where the HTTP wrappers leave a request's facts for the MCP steps it carries."""
+
+
 @dataclass
 class McpEvidence:
     """What an MCP span records, filled in while its message is handled.
@@ -69,6 +109,10 @@ class McpEvidence:
     response_payload: str | None = None
     request_truncated: bool = False
     response_truncated: bool = False
+    request: RequestFacts | None = None
+    """The HTTP request that carried the message; None for one that came by none (stdio, in memory)."""
+    jsonrpc_id: str | None = None
+    """The message's JSON-RPC id as text, sent with ``request`` only; None on a notification."""
 
 
 @dataclass(frozen=True)
