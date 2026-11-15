@@ -8,6 +8,7 @@ holds these copies.
 from __future__ import annotations
 
 import math
+import re
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -30,10 +31,12 @@ from opentelemetry.trace import (
 from opentelemetry.util.types import AttributeValue
 
 from ._handoff import valid_marker
-from ._runtime import Attributes, McpEvidence, Runtime, SpanMeta
+from ._runtime import Attributes, McpEvidence, RequestFacts, Runtime, SpanMeta
 from ._text import bounded, js_json, utf16_length, valid_text
 
 _LIMIT = 4096
+_HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+"""An HTTP token (RFC 9110), as a header name is written."""
 REQUEST_PAYLOAD = "agentrail.mcp.request.payload"
 RESPONSE_PAYLOAD = "agentrail.mcp.response.payload"
 REQUEST_TRUNCATED = "agentrail.mcp.request.truncated"
@@ -207,6 +210,50 @@ def _mcp_attributes(attributes: Attributes, evidence: McpEvidence) -> None:
     ):
         if flag:
             attributes[key] = True
+    if evidence.request is not None:
+        _request_facts(attributes, evidence.request)
+        if evidence.jsonrpc_id is not None:
+            attributes["agentrail.mcp.jsonrpc.id"] = evidence.jsonrpc_id
+
+
+def _request_facts(attributes: Attributes, facts: RequestFacts) -> None:
+    """The contract's ``otlp.mcpSpans.requestFacts``: the HTTP request that carried the message.
+
+    No HTTP status: a step can end before its answer's status is written (a JSON
+    response is written after it), so only the HTTP entry span carries one.
+    """
+    attributes["http.request.method"] = bounded(facts.method, _LIMIT)
+    url = sanitized_url(facts.url)
+    if url is not None:
+        attributes["url.full"] = url
+    for key, value in (
+        ("user_agent.original", facts.user_agent),
+        ("agentrail.http.request.accept", facts.accept),
+        ("agentrail.http.request.accept_encoding", facts.accept_encoding),
+    ):
+        if value:
+            attributes[key] = bounded(value, _LIMIT)
+    names = _header_names(facts.header_names)
+    if names is not None:
+        attributes["agentrail.http.request.header_names"] = names
+
+
+def _header_names(names: tuple[str, ...]) -> str | None:
+    """Comma-joined, whole names within the text limit; None when any is no HTTP token.
+
+    A "name" that is no token holds a value, or part of one (a lax server's), so
+    no part of the list is sent: the collector would take none of it either.
+    """
+    if not names or not all(_HEADER_NAME.fullmatch(name) for name in names):
+        return None
+    kept: list[str] = []
+    length = -1
+    for name in names:
+        length += len(name) + 1  # a token is ASCII: one UTF-16 unit a character
+        if length > _LIMIT:
+            break
+        kept.append(name)
+    return ",".join(kept)
 
 
 def _utf8_length(value: str) -> int:

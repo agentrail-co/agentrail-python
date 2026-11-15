@@ -721,6 +721,17 @@
                           "type": "null"
                         }
                       ]
+                    },
+                    "client": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -3992,6 +4003,10 @@
       "responsePayload": "agentrail.mcp.response.payload",
       "requestTruncated": "agentrail.mcp.request.truncated",
       "responseTruncated": "agentrail.mcp.response.truncated",
+      "headerNames": "agentrail.http.request.header_names",
+      "accept": "agentrail.http.request.accept",
+      "acceptEncoding": "agentrail.http.request.accept_encoding",
+      "jsonrpcId": "agentrail.mcp.jsonrpc.id",
       "methodName": "mcp.method.name",
       "rpcMethod": "rpc.method",
       "toolName": "gen_ai.tool.name",
@@ -4007,8 +4022,143 @@
       "standardNames": "mcp.method.name on transport and handler spans; gen_ai.tool.name for tools/call and gen_ai.prompt.name for prompts/get, using the requested name on transport spans and the registered name on handler spans, bounded to 256 UTF-16 units. Resources have no name attribute: mcp.resource.uri is omitted.",
       "handler": "A tool, resource or prompt callback inside a transport span: its child, layer handler, and no step (no agentrail.step). Alone, as an SDK without the transport wrapper sends it, it is the step itself and carries what a transport span would where the callback can see it: client name, version and protocol, session.id_hash, and result.is_error for a tools/call result with isError.",
       "sizes": "request.bytes and response.bytes are the UTF-8 length of the JSON-RPC message as the SDK encodes it, without whitespace.",
+      "requestFacts": "On a step span (a transport span, or a handler span that is the step) of a message that came by HTTP: http.request.method and url.full of the HTTP request that carried it, http.response.status_code where it was answered over HTTP, user_agent.original, and the request's header facts: agentrail.http.request.header_names, the names of its headers as the server received them, comma-joined, never a value, in arrival order and case where the runtime keeps them (lower-cased, in any order, where it does not), Host included; agentrail.http.request.accept and agentrail.http.request.accept_encoding, the two headers' values as sent, each absent where the request sent none. agentrail.mcp.jsonrpc.id is the message's JSON-RPC id as text (a number in decimal), absent on a notification; gen_ai.tool.name on a tools/call names the tool asked for. A message over stdio sends none of these. Every message of a batched request carries that request's facts. The collector leaves out what a proxy adds (the names headerNames.addedOnTheWay matches) and keeps the first 40 names within 512 characters; a list holding anything but header names, an id past 128 characters, or a value holding a NUL or half a surrogate pair is not taken, and the event names it in redactions. mcpRequestFacts holds two requests as their clients wrote them and the attributes an SDK sends for each.",
       "session": "session.id_hash is the keyed hash (the resource hash key, as principal ids are hashed) of the Mcp-Session-Id the server issued, never an id only a request carried; absent where the server issued none (stateless HTTP, stdio, the 2026-07-28 protocol). It needs agentrail.hash_key_id on the resource.",
       "payloads": "request.payload (the request params) and response.payload (the result, or the error object) are sent only when the application turns payload capture on, which needs a redact hook, as JSON text after it; a hook that drops the payload sends neither, and one that fails or returns what is not JSON is the loss code payload_redact_failed. A request with no answer (a notification, a cancelled request) still sends its request payload. No length of ours bounds them, except that a span's two payloads together are cut to limits.mcpPayloadBytes (UTF-8, on a character boundary), the longer first, with its truncated flag set, so one span always fits an export. An SDK holds at most 64 MiB of payload text per queue (loss code payload_budget). The collector keeps them only for a source whose Admin turned payload capture on."
+    },
+    "mcpRequestFacts": {
+      "source": "The header names, their order, Accept and Accept-Encoding of the two MCP clients the lab measured on 2026-11-04 (packages/journey-linkage/src/features/harness.ts, its two rows): Claude Code 2.1.318 on 620 of 620 MCP POSTs and Codex 0.166.0 on 557 of 557. Values other than those three, the bodies and the host are stand-ins. The Codex request also carries x-forwarded-for, as a load balancer appends it, which no reader takes as the caller's.",
+      "requests": [
+        {
+          "name": "claude-code-2.1.318-tools-call",
+          "harness": "Claude Code",
+          "method": "POST",
+          "url": "https://mcp.example.test/mcp",
+          "headers": [
+            [
+              "accept",
+              "application/json, text/event-stream"
+            ],
+            [
+              "accept-encoding",
+              "identity"
+            ],
+            [
+              "authorization",
+              "Bearer stand-in"
+            ],
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "user-agent",
+              "claude-code/2.1.318 (sdk-cli)"
+            ],
+            [
+              "mcp-protocol-version",
+              "2025-06-18"
+            ],
+            [
+              "connection",
+              "keep-alive"
+            ],
+            [
+              "host",
+              "mcp.example.test"
+            ],
+            [
+              "content-length",
+              "95"
+            ]
+          ],
+          "body": {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+              "name": "list_projects",
+              "arguments": {}
+            }
+          },
+          "attributes": {
+            "http.request.method": "POST",
+            "url.full": "https://mcp.example.test/mcp",
+            "user_agent.original": "claude-code/2.1.318 (sdk-cli)",
+            "agentrail.http.request.header_names": "accept,accept-encoding,authorization,content-type,user-agent,mcp-protocol-version,connection,host,content-length",
+            "agentrail.http.request.accept": "application/json, text/event-stream",
+            "agentrail.http.request.accept_encoding": "identity",
+            "agentrail.mcp.jsonrpc.id": "7",
+            "gen_ai.tool.name": "list_projects"
+          }
+        },
+        {
+          "name": "codex-0.166.0-tools-call",
+          "harness": "Codex",
+          "method": "POST",
+          "url": "https://mcp.example.test/mcp",
+          "headers": [
+            [
+              "user-agent",
+              "codex-mcp-client/0.166.0"
+            ],
+            [
+              "mcp-protocol-version",
+              "2025-06-18"
+            ],
+            [
+              "accept",
+              "text/event-stream, application/json"
+            ],
+            [
+              "content-type",
+              "application/json"
+            ],
+            [
+              "authorization",
+              "Bearer stand-in"
+            ],
+            [
+              "host",
+              "mcp.example.test"
+            ],
+            [
+              "content-length",
+              "95"
+            ],
+            [
+              "x-forwarded-for",
+              "203.0.113.7"
+            ]
+          ],
+          "body": {
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+              "name": "list_projects",
+              "arguments": {}
+            }
+          },
+          "attributes": {
+            "http.request.method": "POST",
+            "url.full": "https://mcp.example.test/mcp",
+            "user_agent.original": "codex-mcp-client/0.166.0",
+            "agentrail.http.request.header_names": "user-agent,mcp-protocol-version,accept,content-type,authorization,host,content-length,x-forwarded-for",
+            "agentrail.http.request.accept": "text/event-stream, application/json",
+            "agentrail.mcp.jsonrpc.id": "3",
+            "gen_ai.tool.name": "list_projects"
+          }
+        }
+      ]
+    },
+    "headerNames": {
+      "addedOnTheWay": {
+        "pattern": "^(?:x-forwarded-.*|x-amzn-.*|x-vercel-.*|cf-.*|forwarded|via|x-real-ip|cdn-loop|true-client-ip|agentrail-first-party)$",
+        "flags": "iu"
+      },
+      "maxNames": 40,
+      "maxCharacters": 512
     },
     "logAttributes": {
       "stableId": "agentrail.log.id",
