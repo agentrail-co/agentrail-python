@@ -3,9 +3,9 @@
 Copied, never edited here. Update them where they are made and copy them again.
 
 - `sdk-contract.json` is copied byte for byte from Argus
-  `apps/api/sdk-contract.json` at commit `2f8eb71d8`, branch
+  `apps/api/sdk-contract.json` at commit `a5092a616`, branch
   `feat/cli-journeys` (agentrail-co/argus, the CLI journeys change; SHA-256
-  `432f62c7174d298bc3ad176a909322b7d7726d316e58af6d5f0cf88339f9af70`). It includes `cliHeader` (the `x-agentrail-cli` header a customer's
+  `9d46a125cd143df327f02830db604a96a89874ee3b0eb763445262cfa662a25a`). It includes `cliHeader` (the `x-agentrail-cli` header a customer's
   CLI sends, how it is read, and its vectors), `otlp.cliAttributes` and
   `otlp.cliSpans`, which the middleware sends, and the event's `cli`; and
   `otlp.mcpAttributes`, `otlp.mcpSpans` (a tool whose handler raised is a

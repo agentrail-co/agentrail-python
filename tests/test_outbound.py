@@ -189,3 +189,23 @@ def test_httpx_close_failure_is_recorded() -> None:
         call = by_name(rec.spans(), "HTTP GET")
         assert call["attributes"]["error.type"] == "TransportError"
         assert call["status"] == 2
+
+
+# Fails if someone lets a server send a CLI's header on: a server that copies
+# incoming headers into its own calls would tell the next service, listed or
+# not, the CLI's run, session and command.
+def test_a_cli_header_is_never_sent_on() -> None:
+    cli = {"x-agentrail-cli": 'v=1, sdk="0.4.0", cli="acme"'}
+    with server() as (allowed_origin, allowed_seen), server() as (other_origin, other_seen):
+        with recording(outbound_origins=(allowed_origin, ALLOWED)) as rec:
+            network = Recorder()
+            client = httpx.Client(transport=transport(rec.client, network))
+            session = requests.Session()
+            session.mount("http://", adapter(rec.client))
+            with rec.client.start_milestone("sync", STEP):
+                client.get(f"{ALLOWED}/x", headers=cli)
+                client.get("https://other.test/x", headers=cli)
+                session.get(f"{allowed_origin}/x", headers=cli)
+                session.get(f"{other_origin}/x", headers=cli)
+            assert [request.headers.get("x-agentrail-cli") for request in network.requests] == [None, None]
+            assert [seen.get("x-agentrail-cli") for seen in allowed_seen + other_seen] == [None, None]

@@ -19,6 +19,10 @@ from ._text import js_json, well_formed
 HANDOFF_HEADER = "x-agentrail-trace-handoff"
 # Headers a managed request never forwards as received.
 OWNED_HEADERS = ("traceparent", "tracestate", "baggage", "sentry-trace", HANDOFF_HEADER)
+# What a managed request never sends on as the server received it: the owned
+# trace headers, and a CLI's x-agentrail-cli, which names its run and session
+# to this server alone.
+STRIPPED_HEADERS = (*OWNED_HEADERS, "x-agentrail-cli")
 MAX_AGE_MS = 60_000
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
 

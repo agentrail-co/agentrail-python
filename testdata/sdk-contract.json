@@ -5001,10 +5001,10 @@
     "header": "x-agentrail-cli",
     "notes": [
       "What a customer's CLI says of itself on each request to its own API, written by agentrail-cli-sdk (and its Go and Python twins): an RFC 9651 Dictionary. v (Integer, the version, 1), sdk (String, the CLI SDK's version), cli and cliv (Strings, the CLI's name and version), run (String, a UUID minted for the run), seq (Integer from 1, the request's place in the run), ses (String, 32 lowercase hex: the session), sesfrom (Token: agent, ci, local or run), mode (Token: agent, ci, interactive or non-interactive), agent and agentv (Strings: the agent detected, lowercase letters, digits, '.', '_' and '-', and its version), ev (Inner List of Strings: the names of the variables the agent or CI was told by, never their values, 1 to 8) and cmd (String: the command, by the words the CLI's code declared, never its arguments). Strings are printable ASCII, at most 64 characters (cmd 128). cliv, agent, agentv, ev and cmd are absent where unknown.",
-      "A later version only adds members and never changes what one means: a reader takes any v from 1, ignores the members it does not know, and reads nothing (no attribute, no cli) from a header that is not a Dictionary, misses a member, holds one outside these rules, or gives one twice, as two header lines a server joins into one value do.",
+      "A later version only adds members and never changes what one means: a reader takes any v from 1, ignores the members it does not know (of any RFC 9651 type, Dates and Display Strings included), and reads nothing (no attribute, no cli) from a header that is not a Dictionary, misses a member, holds one outside these rules, or gives one twice, as two header lines a server joins into one value do.",
       "ses is hex(SHA-256(\"agentrail-cli-session\" NUL scope NUL sesfrom NUL source)), its first 32 characters. scope is the CLI's session scope (its name unless it names another). source is, for agent, the variable the agent names its own session in and its value as NAME=value; for ci, the CI service and the parts naming its run (sessionKeys); for local, the id of a session the CLI keeps for 30 minutes without a request and a day at most, in the file named by sessionFiles (hex(SHA-256(scope NUL agent-or-empty)), first 16 characters); for run, the run id.",
       "A server SDK sends ses only as its keyed hash (keyedSession; cliSpans). The edge sends a CLI request as an event with cli set and session.id cli:<keyed hash of ses>:<the UTC day the request started, as days since the epoch>, in place of the visit cookie a CLI never sends back.",
-      "The CLI sends the header only to the origins it lists, and never what people type. A server never passes the header on to another origin."
+      "The CLI sends the header only to the origins it lists, and never what people type. A server SDK never sends it on in the requests its server makes; the edge passes it to the origin it stands in front of, whose server SDK reads it too."
     ],
     "vectors": {
       "header": {
@@ -5028,7 +5028,7 @@
         }
       },
       "later": {
-        "value": "v=2, sdk=\"0.3.0\", cli=\"acme\", cliv=\"2.3.1\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=3, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=agent, mode=agent, agent=\"claude-code\", agentv=\"2.1.325\", ev=(\"AI_AGENT\" \"CLAUDECODE\"), cmd=\"deploy create\", flags=(\"json\"), future=?1",
+        "value": "v=2, sdk=\"0.3.0\", cli=\"acme\", cliv=\"2.3.1\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=3, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=agent, mode=agent, agent=\"claude-code\", agentv=\"2.1.325\", ev=(\"AI_AGENT\" \"CLAUDECODE\"), cmd=\"deploy create\", flags=(\"json\");n=1, future=?1, at=@1659578233, note=%\"caf%c3%a9\", ratio=0.5, raw=:AQID:",
         "reads": {
           "sdkVersion": "0.3.0",
           "cli": "acme",

@@ -133,8 +133,10 @@ def copy_span(span: ReadableSpan, meta: SpanMeta, runtime: Runtime) -> ReadableS
     if kind == SpanKind.SERVER:
         attributes["agentrail.ingress.verified"] = meta.state.verified
         # Only the request's own entry span: a CLI's header says nothing of the
-        # calls this server makes while answering it.
-        attributes.update(meta.state.cli)
+        # calls this server makes while answering it, nor of another server span.
+        this = span.get_span_context()
+        if this is not None and meta.state.entry is not None and this.span_id == meta.state.entry.span_id:
+            attributes.update(meta.state.cli)
     method = attributes.get("http.request.method")
     name = f"HTTP {method}" if isinstance(method, str) else "backend.operation"
     if mark is not None:
