@@ -140,6 +140,12 @@ cut side is flagged. A multi-round-trip `requestState` is never sent. A request 
 middleware runs (a malformed body, a wrong header, an unknown session) is no
 MCP step; behind `agentrail.asgi` it is still recorded as its HTTP request.
 
+When a customer's CLI uses [`agentrail-cli-sdk`](https://www.npmjs.com/package/agentrail-cli-sdk),
+its requests say which command an agent ran, in which run and session. The
+ASGI and WSGI middleware record that on the request's span, the session only as
+a keyed hash, so the agent's CLI runs join its journey. There is nothing to
+configure.
+
 Agentrail never fails your request: anything it could not capture or send goes
 to your `on_error` callback.
 

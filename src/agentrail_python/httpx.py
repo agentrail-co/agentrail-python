@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from ._handoff import OWNED_HEADERS
+from ._handoff import STRIPPED_HEADERS
 from ._outbound import begin, finish, origin
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ def _prepare(client: Client, request: httpx.Request) -> Span | None:
         str(url),
     )
     if outgoing.strip:
-        for name in OWNED_HEADERS:
+        for name in STRIPPED_HEADERS:
             request.headers.pop(name, None)
     for name, value in outgoing.headers.items():
         request.headers[name] = value

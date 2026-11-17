@@ -30,6 +30,8 @@ dependencies = [
   "opentelemetry-api>=1.45.1,<1.46",
   "opentelemetry-sdk>=1.45.1,<1.46",
   "opentelemetry-exporter-otlp-proto-http>=1.45.1,<1.46",
+  # RFC 9651 Structured Fields, for the x-agentrail-cli header a customer's CLI sends.
+  "http-sf>=1.5.0,<2",
 ]
 
 [project.optional-dependencies]

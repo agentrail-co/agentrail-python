@@ -964,6 +964,119 @@
                 }
               ]
             },
+            "cli": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[\\x20-\\x7e]{1,64}$"
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[\\x20-\\x7e]{1,64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "command": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[\\x20-\\x7e]{1,128}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "run": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                    },
+                    "sequence": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    },
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "agent",
+                        "ci",
+                        "interactive",
+                        "non-interactive"
+                      ]
+                    },
+                    "sessionFrom": {
+                      "type": "string",
+                      "enum": [
+                        "agent",
+                        "ci",
+                        "local",
+                        "run"
+                      ]
+                    },
+                    "agent": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[a-z0-9._-]{1,64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "agentVersion": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[\\x20-\\x7e]{1,64}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "evidence": {
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+                      }
+                    },
+                    "sdkVersion": {
+                      "type": "string",
+                      "pattern": "^[\\x20-\\x7e]{1,64}$"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "version",
+                    "command",
+                    "run",
+                    "sequence",
+                    "mode",
+                    "sessionFrom",
+                    "agent",
+                    "agentVersion",
+                    "evidence",
+                    "sdkVersion"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "redactions": {
               "type": "array",
               "items": {
@@ -1652,6 +1765,9 @@
                   "type": "null"
                 }
               ]
+            },
+            "cli": {
+              "type": "null"
             },
             "redactions": {
               "type": "array",
@@ -2720,6 +2836,9 @@
             ],
             "additionalProperties": false
           },
+          "cli": {
+            "type": "null"
+          },
           "redactions": {
             "type": "array",
             "items": {
@@ -3541,6 +3660,337 @@
           }
         },
         {
+          "name": "sdk-cli-request",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    },
+                    {
+                      "key": "agentrail.hash_key_id",
+                      "value": {
+                        "stringValue": "0123456789abcdef"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "synthetic request",
+                        "kind": 2,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "attributes": [
+                          {
+                            "key": "http.request.method",
+                            "value": {
+                              "stringValue": "POST"
+                            }
+                          },
+                          {
+                            "key": "url.full",
+                            "value": {
+                              "stringValue": "https://api.example.com/v1/deployments"
+                            }
+                          },
+                          {
+                            "key": "http.response.status_code",
+                            "value": {
+                              "intValue": "201"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.name",
+                            "value": {
+                              "stringValue": "acme"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.version",
+                            "value": {
+                              "stringValue": "2.3.1"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.command",
+                            "value": {
+                              "stringValue": "deploy create"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.run_id",
+                            "value": {
+                              "stringValue": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.sequence",
+                            "value": {
+                              "intValue": "3"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.mode",
+                            "value": {
+                              "stringValue": "agent"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.session.id_hash",
+                            "value": {
+                              "stringValue": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.session.source",
+                            "value": {
+                              "stringValue": "agent"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.name",
+                            "value": {
+                              "stringValue": "claude-code"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.version",
+                            "value": {
+                              "stringValue": "2.1.325"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.evidence",
+                            "value": {
+                              "stringValue": "AI_AGENT,CLAUDECODE"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.sdk.version",
+                            "value": {
+                              "stringValue": "0.4.0"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": {
+            "spans": 1,
+            "events": [
+              {
+                "surface": "http",
+                "kind": "http.request",
+                "session": {
+                  "id": "cli:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:20760",
+                  "previousId": null
+                },
+                "http": {
+                  "method": "POST",
+                  "path": "/v1/deployments",
+                  "status": 201
+                },
+                "cli": {
+                  "name": "acme",
+                  "version": "2.3.1",
+                  "command": "deploy create",
+                  "run": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab",
+                  "sequence": 3,
+                  "mode": "agent",
+                  "sessionFrom": "agent",
+                  "agent": "claude-code",
+                  "agentVersion": "2.1.325",
+                  "evidence": [
+                    "AI_AGENT",
+                    "CLAUDECODE"
+                  ],
+                  "sdkVersion": "0.4.0"
+                }
+              }
+            ],
+            "logs": []
+          }
+        },
+        {
+          "name": "sdk-cli-request-outside-limits",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    },
+                    {
+                      "key": "agentrail.hash_key_id",
+                      "value": {
+                        "stringValue": "0123456789abcdef"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "synthetic request",
+                        "kind": 2,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "attributes": [
+                          {
+                            "key": "http.request.method",
+                            "value": {
+                              "stringValue": "POST"
+                            }
+                          },
+                          {
+                            "key": "url.full",
+                            "value": {
+                              "stringValue": "https://api.example.com/v1/deployments"
+                            }
+                          },
+                          {
+                            "key": "http.response.status_code",
+                            "value": {
+                              "intValue": "201"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.name",
+                            "value": {
+                              "stringValue": "acme"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.version",
+                            "value": {
+                              "stringValue": "2.3.1"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.command",
+                            "value": {
+                              "stringValue": "deploy create"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.run_id",
+                            "value": {
+                              "stringValue": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.sequence",
+                            "value": {
+                              "intValue": "3"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.mode",
+                            "value": {
+                              "stringValue": "robot"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.session.id_hash",
+                            "value": {
+                              "stringValue": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.session.source",
+                            "value": {
+                              "stringValue": "agent"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.name",
+                            "value": {
+                              "stringValue": "claude-code"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.version",
+                            "value": {
+                              "stringValue": "2.1.325"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.evidence",
+                            "value": {
+                              "stringValue": "AI_AGENT,CLAUDECODE"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.sdk.version",
+                            "value": {
+                              "stringValue": "0.4.0"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "expected": {
+            "spans": 1,
+            "events": [
+              {
+                "surface": "http",
+                "session": null,
+                "redactions": [
+                  {
+                    "field": "attributes",
+                    "reason": "attribute_allowlist"
+                  },
+                  {
+                    "field": "cli",
+                    "reason": "outside_limits"
+                  }
+                ]
+              }
+            ],
+            "logs": []
+          }
+        },
+        {
           "name": "correlated-log-without-message-consent",
           "signal": "logs",
           "request": {
@@ -3906,6 +4356,138 @@
           }
         },
         {
+          "name": "cli-session-hash-without-key-id",
+          "signal": "traces",
+          "request": {
+            "resourceSpans": [
+              {
+                "resource": {
+                  "attributes": [
+                    {
+                      "key": "service.name",
+                      "value": {
+                        "stringValue": "synthetic-api"
+                      }
+                    },
+                    {
+                      "key": "agentrail.component.name",
+                      "value": {
+                        "stringValue": "agentrail-node"
+                      }
+                    }
+                  ]
+                },
+                "scopeSpans": [
+                  {
+                    "spans": [
+                      {
+                        "traceId": "11111111111111111111111111111111",
+                        "spanId": "aaaaaaaaaaaaaaaa",
+                        "name": "synthetic request",
+                        "kind": 2,
+                        "startTimeUnixNano": "1793743200000123456",
+                        "endTimeUnixNano": "1793743200010000000",
+                        "attributes": [
+                          {
+                            "key": "http.request.method",
+                            "value": {
+                              "stringValue": "POST"
+                            }
+                          },
+                          {
+                            "key": "url.full",
+                            "value": {
+                              "stringValue": "https://api.example.com/v1/deployments"
+                            }
+                          },
+                          {
+                            "key": "http.response.status_code",
+                            "value": {
+                              "intValue": "201"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.name",
+                            "value": {
+                              "stringValue": "acme"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.version",
+                            "value": {
+                              "stringValue": "2.3.1"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.command",
+                            "value": {
+                              "stringValue": "deploy create"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.run_id",
+                            "value": {
+                              "stringValue": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.sequence",
+                            "value": {
+                              "intValue": "3"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.mode",
+                            "value": {
+                              "stringValue": "agent"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.session.id_hash",
+                            "value": {
+                              "stringValue": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.session.source",
+                            "value": {
+                              "stringValue": "agent"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.name",
+                            "value": {
+                              "stringValue": "claude-code"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.version",
+                            "value": {
+                              "stringValue": "2.1.325"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.agent.evidence",
+                            "value": {
+                              "stringValue": "AI_AGENT,CLAUDECODE"
+                            }
+                          },
+                          {
+                            "key": "agentrail.cli.sdk.version",
+                            "value": {
+                              "stringValue": "0.4.0"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
           "name": "verified-hash-without-key-id",
           "signal": "traces",
           "request": {
@@ -4152,9 +4734,24 @@
         }
       ]
     },
+    "cliAttributes": {
+      "name": "agentrail.cli.name",
+      "version": "agentrail.cli.version",
+      "command": "agentrail.cli.command",
+      "run": "agentrail.cli.run_id",
+      "sequence": "agentrail.cli.sequence",
+      "mode": "agentrail.cli.mode",
+      "sessionHash": "agentrail.cli.session.id_hash",
+      "sessionFrom": "agentrail.cli.session.source",
+      "agent": "agentrail.cli.agent.name",
+      "agentVersion": "agentrail.cli.agent.version",
+      "evidence": "agentrail.cli.agent.evidence",
+      "sdkVersion": "agentrail.cli.sdk.version"
+    },
+    "cliSpans": "On the entry span of a request whose x-agentrail-cli header reads (cliHeader), a server SDK sets cliAttributes from what it said: name, version, command, run_id, sequence (an integer), mode, session.source, agent.name, agent.version, agent.evidence (the names, comma-joined) and sdk.version, each absent where the header has none; and session.id_hash, the keyed hash of the header's ses with the resource hash key, never ses itself. It needs agentrail.hash_key_id on the resource. A header that does not read sends no attribute. The collector takes them as the event's cli and names its session cli:<session.id_hash>:<the UTC day the span started, as days since the epoch>; facts outside what an event holds are not taken, and the event names cli (or cli.session) in redactions.",
     "headerNames": {
       "addedOnTheWay": {
-        "pattern": "^(?:x-forwarded-.*|x-amzn-.*|x-vercel-.*|cf-.*|forwarded|via|x-real-ip|cdn-loop|true-client-ip|agentrail-first-party)$",
+        "pattern": "^(?:x-forwarded-.*|x-amzn-.*|x-vercel-.*|cf-.*|forwarded|via|x-real-ip|cdn-loop|true-client-ip|logs-url|x-invocation-id|agentrail-first-party)$",
         "flags": "iu"
       },
       "maxNames": 40,
@@ -4178,6 +4775,115 @@
       "selectedTextCharacters": 4096,
       "mcpPayloadBytes": 14680064,
       "exportBatchBytes": 15728640
+    }
+  },
+  "cliHeader": {
+    "header": "x-agentrail-cli",
+    "notes": [
+      "What a customer's CLI says of itself on each request to its own API, written by agentrail-cli-sdk (and its Go and Python twins): an RFC 9651 Dictionary. v (Integer, the version, 1), sdk (String, the CLI SDK's version), cli and cliv (Strings, the CLI's name and version), run (String, a UUID minted for the run), seq (Integer from 1, the request's place in the run), ses (String, 32 lowercase hex: the session), sesfrom (Token: agent, ci, local or run), mode (Token: agent, ci, interactive or non-interactive), agent and agentv (Strings: the agent detected, lowercase letters, digits, '.', '_' and '-', and its version), ev (Inner List of Strings: the names of the variables the agent or CI was told by, never their values, 1 to 8) and cmd (String: the command, by the words the CLI's code declared, never its arguments). Strings are printable ASCII, 1 to 64 characters (cmd 1 to 128): run a lowercase UUID, ses 32 lowercase hex, agent `^[a-z0-9._-]{1,64}$`, each ev name `^[A-Za-z_][A-Za-z0-9_]{0,63}$`; seq is 1 to 999999999999999. cliv, agent, agentv, ev and cmd are absent where unknown, and a CLI's root command sends no cmd.",
+      "A later version only adds members and never changes what one means: a reader takes any v from 1, ignores the members it does not know (of any RFC 9651 type, Dates and Display Strings included), and reads nothing (no attribute, no cli) from a header that is not a Dictionary, misses a member, holds one outside these rules, or gives one twice, as two header lines a server joins into one value do.",
+      "ses is hex(SHA-256(\"agentrail-cli-session\" NUL scope NUL sesfrom NUL source)), its first 32 characters. scope is the CLI's session scope (its name unless it names another). source is, for agent, the variable the agent names its own session in and its value as NAME=value; for ci, the CI service and the parts naming its run (sessionKeys); for local, the id of a session the CLI keeps for 30 minutes without a request and a day at most, in the file named by sessionFiles (hex(SHA-256(scope NUL agent-or-empty)), first 16 characters); for run, the run id.",
+      "A server SDK sends ses only as its keyed hash (keyedSession; cliSpans). The edge sends a CLI request as an event with cli set and session.id cli:<keyed hash of ses>:<the UTC day the request started, as days since the epoch>, in place of the visit cookie a CLI never sends back.",
+      "The CLI sends the header only to the origins it lists, and never what people type. A server SDK never sends it on in the requests its server makes; the edge passes it to the origin it stands in front of, whose server SDK reads it too."
+    ],
+    "vectors": {
+      "header": {
+        "value": "v=1, sdk=\"0.3.0\", cli=\"acme\", cliv=\"2.3.1\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=3, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=agent, mode=agent, agent=\"claude-code\", agentv=\"2.1.325\", ev=(\"AI_AGENT\" \"CLAUDECODE\"), cmd=\"deploy create\"",
+        "reads": {
+          "sdkVersion": "0.3.0",
+          "cli": "acme",
+          "cliVersion": "2.3.1",
+          "run": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab",
+          "sequence": 3,
+          "session": "5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29",
+          "sessionFrom": "agent",
+          "mode": "agent",
+          "agent": "claude-code",
+          "agentVersion": "2.1.325",
+          "evidence": [
+            "AI_AGENT",
+            "CLAUDECODE"
+          ],
+          "command": "deploy create"
+        }
+      },
+      "later": {
+        "value": "v=2, sdk=\"0.3.0\", cli=\"acme\", cliv=\"2.3.1\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=3, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=agent, mode=agent, agent=\"claude-code\", agentv=\"2.1.325\", ev=(\"AI_AGENT\" \"CLAUDECODE\"), cmd=\"deploy create\", flags=(\"json\");n=1, future=?1, at=@1659578233, note=%\"caf%c3%a9\", ratio=0.5, raw=:AQID:",
+        "reads": {
+          "sdkVersion": "0.3.0",
+          "cli": "acme",
+          "cliVersion": "2.3.1",
+          "run": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab",
+          "sequence": 3,
+          "session": "5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29",
+          "sessionFrom": "agent",
+          "mode": "agent",
+          "agent": "claude-code",
+          "agentVersion": "2.1.325",
+          "evidence": [
+            "AI_AGENT",
+            "CLAUDECODE"
+          ],
+          "command": "deploy create"
+        }
+      },
+      "unread": [
+        "",
+        "not a dictionary",
+        "v=0, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, sesfrom=local, mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"CLAUDE_CODE_SESSION_ID=abc\", sesfrom=local, mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=robot",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=\"local\", mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=0, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, ev=\"AI_AGENT\"",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, ev=(1 2)",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, cmd=deploy",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, cmd=\"\"",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, cliv=\"\"",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193F2C4-7A1B-7C3D-8E4F-0123456789AB\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, agent=\"Claude Code\"",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, ev=(\"1_NOT_A_NAME\")",
+        "v=1, sdk=\"0.3.0\", cli=\"acme\", run=\"0193f2c4-7a1b-7c3d-8e4f-0123456789ab\", seq=1, ses=\"5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29\", sesfrom=local, mode=interactive, cmd=\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\""
+      ],
+      "sessionKeys": [
+        {
+          "scope": "acme",
+          "from": "agent",
+          "source": "CLAUDE_CODE_SESSION_ID=3f1c9a52-0d4e-4c55-9f7a-2b8e6d1c0a77",
+          "key": "5b02649063662e9ac7a5c645ef8d900e"
+        },
+        {
+          "scope": "acme",
+          "from": "ci",
+          "source": "github-actions:https://github.com/acme/app/42/1",
+          "key": "8ae62ffda4ed2d26ab8609604a43bee8"
+        },
+        {
+          "scope": "acme",
+          "from": "local",
+          "source": "0193f2c4-7a1b-7c3d-8e4f-0123456789ab",
+          "key": "ecb1b0aa83071b5602c8a32cb602b1f8"
+        }
+      ],
+      "sessionFiles": [
+        {
+          "scope": "acme",
+          "agent": null,
+          "file": "cli-session-db9eb2ca502cc51f.json"
+        },
+        {
+          "scope": "acme",
+          "agent": "gemini-cli",
+          "file": "cli-session-d5065224407b69af.json"
+        }
+      ],
+      "keyedSession": {
+        "hashKey": "synthetic-workspace-key-for-cli-tests",
+        "session": "5f2c09d1aa0b4c3e9d8f7e6d5c4b3a29",
+        "hash": "200b6a880fd6ceacef025168797de2cd"
+      }
     }
   },
   "traceHandoff": {

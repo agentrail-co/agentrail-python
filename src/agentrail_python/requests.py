@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from requests import PreparedRequest, Response
 from requests.adapters import HTTPAdapter
 
-from ._handoff import OWNED_HEADERS
+from ._handoff import STRIPPED_HEADERS
 from ._outbound import begin, finish, origin
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ class AgentrailAdapter(HTTPAdapter):
             url,
         )
         if outgoing.strip:
-            for name in OWNED_HEADERS:
+            for name in STRIPPED_HEADERS:
                 request.headers.pop(name, None)
         request.headers.update(outgoing.headers)
         if outgoing.span is None:
