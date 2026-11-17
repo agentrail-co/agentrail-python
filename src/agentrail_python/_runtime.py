@@ -37,6 +37,8 @@ class RequestState:
     verified: bool = False
     links: list[Link] = field(default_factory=lambda: [])
     location: Attributes = field(default_factory=lambda: {})
+    cli: Attributes = field(default_factory=lambda: {})
+    """What a CLI's x-agentrail-cli header said of the request (``_cli.py``); set before the application runs."""
     entry: SpanContext | None = None
     """The managed entry's span: what a milestone nests under, whatever a library continued."""
     _identity: Attributes | None = None

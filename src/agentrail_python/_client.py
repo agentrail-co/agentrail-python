@@ -17,6 +17,7 @@ from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, StatusCode, TraceFlags
 
+from ._cli import CLI_HEADER, cli_attributes
 from ._handoff import HANDOFF_HEADER, Refused, keyed_hash, parse_traceparent, verify
 from ._options import (
     LOCATION_SOURCES,
@@ -345,6 +346,7 @@ class Client:
             remote_context = SpanContext(remote.trace_id, remote.span_id, True, TraceFlags(remote.flags & 1))
             ctx = trace.set_span_in_context(NonRecordingSpan(remote_context), ctx)
         state.location = self._location(request)
+        state.cli = cli_attributes(request.headers.get(CLI_HEADER), self._keyed_hash)
         ctx = otel_context.set_value(self._runtime.state_key, state, ctx)
         attributes: Attributes = {
             "http.request.method": request.method,
