@@ -3,9 +3,9 @@
 Copied, never edited here. Update them where they are made and copy them again.
 
 - `sdk-contract.json` is copied byte for byte from Argus
-  `apps/api/sdk-contract.json` at commit `92f514c7f`, branch
-  `feat/cli-journeys` (agentrail-co/argus, the CLI journeys change; SHA-256
-  `0d4cd14df4eb7cdcbc433ca62ea7b9b6364b696e73f02a8e31384a8062668454`). It includes `cliHeader` (the `x-agentrail-cli` header a customer's
+  `apps/api/sdk-contract.json` at commit `b9f706771`, branch
+  `fix/linkage-wire-behind-edge` (agentrail-co/argus#762; SHA-256
+  `49fa11fd358a233f138adb73273fccf86997eda3bd037c8b877671c62d1f4cc4`). It includes `cliHeader` (the `x-agentrail-cli` header a customer's
   CLI sends, how it is read, and its vectors), `otlp.cliAttributes` and
   `otlp.cliSpans`, which the middleware sends, and the event's `cli`; and
   `otlp.mcpAttributes`, `otlp.mcpSpans` (a tool whose handler raised is a
@@ -13,7 +13,10 @@ Copied, never edited here. Update them where they are made and copy them again.
   a step says of the HTTP request that carried its message),
   `otlp.mcpRequestFacts` (two recorded requests, Claude Code 2.1.318 and Codex
   0.166.0, and the attributes an SDK sends for each), `otlp.headerNames` (with
-  `cdn-loop` and `true-client-ip` among the names no caller writes), the client
+  `cdn-loop`, `true-client-ip`, the `render-proxy-ttl`, `rndr-id` and
+  `x-request-start` Render's proxy adds and the `x-agentrail-trace-handoff` an
+  Agentrail edge adds among the names no caller writes; this SDK sends every
+  name and the collector leaves those out), the client
   id a connected app's token was issued to (`principal.client`),
   `otlp.limits.mcpPayloadBytes` and `exportBatchBytes`, the standard MCP naming
   attributes, `tool_error`, and the `sdk-mcp-*` fixtures. It is written by Argus's

@@ -4751,7 +4751,7 @@
     "cliSpans": "On the entry span of a request whose x-agentrail-cli header reads (cliHeader), a server SDK sets cliAttributes from what it said: name, version, command, run_id, sequence (an integer), mode, session.source, agent.name, agent.version, agent.evidence (the names, comma-joined) and sdk.version, each absent where the header has none; and session.id_hash, the keyed hash of the header's ses with the resource hash key, never ses itself. It needs agentrail.hash_key_id on the resource. A header that does not read sends no attribute. The collector takes them as the event's cli and names its session cli:<session.id_hash>:<the UTC day the span started, as days since the epoch>; facts outside what an event holds are not taken, and the event names cli (or cli.session) in redactions.",
     "headerNames": {
       "addedOnTheWay": {
-        "pattern": "^(?:x-forwarded-.*|x-amzn-.*|x-vercel-.*|cf-.*|forwarded|via|x-real-ip|cdn-loop|true-client-ip|logs-url|x-invocation-id|agentrail-first-party)$",
+        "pattern": "^(?:x-forwarded-.*|x-amzn-.*|x-vercel-.*|cf-.*|forwarded|via|x-real-ip|cdn-loop|true-client-ip|logs-url|x-invocation-id|render-proxy-ttl|rndr-id|x-request-start|x-agentrail-trace-handoff|agentrail-first-party)$",
         "flags": "iu"
       },
       "maxNames": 40,
