@@ -62,14 +62,14 @@ from mcp.shared.exceptions import MCPError
 from mcp_types import CLIENT_INFO_META_KEY, INTERNAL_ERROR, INVALID_PARAMS, PROTOCOL_VERSION_META_KEY
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from opentelemetry import context as otel_context
-from opentelemetry import trace
-from opentelemetry.trace import Span, StatusCode
+from opentelemetry.trace import Span, SpanContext, StatusCode, TraceFlags
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticSerializationError, to_json
 
 from ._client import MilestoneScope
+from ._handoff import parse_traceparent
 from ._options import CapturePayloads, McpContext, McpPayload, MilestoneContext
-from ._runtime import REQUEST_FACTS, McpEvidence, RequestFacts
+from ._runtime import REQUEST_FACTS, McpEvidence, RequestFacts, attach, current, current_span, detach
 from ._text import bounded, valid_text, well_formed
 
 if TYPE_CHECKING:
@@ -241,6 +241,22 @@ def _jsonrpc_id(request_id: object) -> str | None:
     return text if text and valid_text(text, _ID_UNITS) else None
 
 
+def _client_trace(params: Mapping[str, Any] | None) -> SpanContext | None:
+    """The trace a client's ``_meta`` traceparent names: a link of the step, never its parent.
+
+    Read from the message, as an incoming request's unsigned traceparent is. The
+    MCP SDK continues it in OpenTelemetry's context, the application's.
+    """
+    meta = None if params is None else params.get("_meta")
+    if not isinstance(meta, Mapping):
+        return None
+    value = cast(Mapping[str, object], meta).get("traceparent")
+    parent = parse_traceparent(value) if isinstance(value, str) else None
+    if parent is None:
+        return None
+    return SpanContext(parent.trace_id, parent.span_id, True, TraceFlags(parent.flags & 1))
+
+
 def _carried_by(evidence: McpEvidence, http_request: object, request_id: object) -> None:
     """The HTTP request that carried the message, as the ASGI or WSGI wrapper recorded it.
 
@@ -249,7 +265,7 @@ def _carried_by(evidence: McpEvidence, http_request: object, request_id: object)
     """
     if http_request is None:
         return
-    facts = otel_context.get_value(REQUEST_FACTS)
+    facts = otel_context.get_value(REQUEST_FACTS, current())
     if isinstance(facts, RequestFacts):
         evidence.request = facts
         evidence.jsonrpc_id = _jsonrpc_id(request_id)
@@ -306,8 +322,9 @@ class McpCapture:
             _span_name(method, target),
             MilestoneContext(surface="mcp", kind=kind, mcp=McpContext(method=method, name=target)),
             mcp=evidence,
+            link=_client_trace(params),
         )
-        token = otel_context.attach(context)
+        token = attach(context)
         call = _TransportCall(self._client)
         inside = _transport.set(call)
         response: object = None
@@ -354,7 +371,7 @@ class McpCapture:
                     self._capture(self._payloads, evidence, method, target, params, response)
                 span.end()
             finally:
-                otel_context.detach(token)
+                detach(token)
 
     def tool(self, name: str, handler: F) -> F:
         """Wrap a tool function. A result with ``isError`` marks the span failed.
@@ -444,27 +461,27 @@ class McpCapture:
         # Inside this client's transport step the handler is its child, not a second step.
         call = _transport.get()
         inside = call if call is not None and call.client is self._client else None
-        if inside is None:
-            self._handler_details(evidence, arguments)
-        scope = MilestoneScope(self._client, label, details, step=inside is None, mcp=evidence)
+        link = None if inside is not None else self._handler_details(evidence, arguments)
+        scope = MilestoneScope(self._client, label, details, step=inside is None, mcp=evidence, link=link)
         return scope, evidence if inside is None else None, inside
 
-    def _handler_details(self, evidence: McpEvidence, arguments: tuple[object, ...]) -> None:
+    def _handler_details(self, evidence: McpEvidence, arguments: tuple[object, ...]) -> SpanContext | None:
         """As the step, what a transport span would carry, when the function receives
-        the MCPServer ``Context``: client details, protocol version, session and
-        the HTTP request that carried the message."""
+        the MCPServer ``Context``: client details, protocol version, session, the
+        HTTP request that carried the message, and the client's trace to link."""
         for value in arguments:
             if isinstance(value, Context):
                 try:
                     request = cast(Context[Any, Any], value).request_context
                 except ValueError:  # a Context built outside a request
-                    return
+                    return None
                 params = request.params
                 evidence.client, evidence.client_version = _client_details(request, request.method, params)
                 evidence.protocol = _carried_protocol(request, request.method, params)
                 evidence.session_hash = self._session_hash(request.session)
                 _carried_by(evidence, request.request, request.request_id)
-                return
+                return _client_trace(params if isinstance(params, Mapping) else None)
+        return None
 
     def _wrap(self, method: str, kind: str, name: str, handler: F) -> F:
         label = _span_name(method, name)
@@ -473,7 +490,7 @@ class McpCapture:
             if _is_error(result):
                 if evidence is not None and method == "tools/call":
                     evidence.is_error = True
-                span = trace.get_current_span()
+                span = current_span()
                 span.set_status(StatusCode.ERROR)
                 # The OpenTelemetry MCP convention's name for a failed tool result.
                 span.set_attribute("error.type", "tool_error")

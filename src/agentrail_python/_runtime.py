@@ -1,17 +1,29 @@
 # Copyright 2026 Agentrail. Licensed under the Apache License, Version 2.0.
-"""Per-installation state: context keys, the resource, and span metadata."""
+"""Per-installation state: context keys, the resource, and span metadata.
+
+Agentrail keeps its request state, milestone mark and current span in a
+context slot of its own (``current``), never in OpenTelemetry's runtime
+context: that one belongs to the application's tracer. OpenTelemetry's ASGI
+middleware inside ours attaches a context extracted into an empty ``Context``,
+and the MCP SDK continues a client's ``_meta`` traceparent the same way; either
+would wipe keys of ours kept there. Nothing here reads, clears or replaces the
+application's current span.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import uuid
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Literal
 
 from opentelemetry import context as otel_context
+from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.util.instrumentation import InstrumentationScope
-from opentelemetry.trace import Link, SpanContext
+from opentelemetry.trace import Link, Span, SpanContext
 from opentelemetry.util.types import AttributeValue
 
 from ._handoff import key_id, keyed_hash
@@ -29,6 +41,32 @@ from ._version import VERSION
 COMPONENT = "agentrail-python"
 Attributes = dict[str, AttributeValue]
 
+_EMPTY = otel_context.Context()
+_slot: ContextVar[otel_context.Context] = ContextVar("agentrail_python_context", default=_EMPTY)
+
+
+def current() -> otel_context.Context:
+    """Agentrail's own context: what its spans are parented on and its state is read from."""
+    return _slot.get()
+
+
+def current_span() -> Span:
+    """Agentrail's current span: its request entry or milestone, never the application's span."""
+    return trace.get_current_span(_slot.get())
+
+
+def attach(ctx: otel_context.Context) -> Token[otel_context.Context]:
+    return _slot.set(ctx)
+
+
+def detach(token: Token[otel_context.Context]) -> None:
+    # ValueError: the scope closed in another context than it opened in (Starlette
+    # steps a sync streamed body in a fresh thread-pool copy per chunk; the event
+    # loop closes an abandoned async generator in a task of its own). That context
+    # never held this value, so there is nothing to restore.
+    with contextlib.suppress(ValueError):
+        _slot.reset(token)
+
 
 @dataclass
 class RequestState:
@@ -40,7 +78,7 @@ class RequestState:
     cli: Attributes = field(default_factory=lambda: {})
     """What a CLI's x-agentrail-cli header said of the request (``_cli.py``); set before the application runs."""
     entry: SpanContext | None = None
-    """The managed entry's span: what a milestone nests under, whatever a library continued."""
+    """The request's own entry span, the only one a CLI's header is recorded on."""
     _identity: Attributes | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -86,7 +124,7 @@ class RequestFacts:
 
 
 REQUEST_FACTS = otel_context.create_key("agentrail.http.request_facts")
-"""Where the HTTP wrappers leave a request's facts for the MCP steps it carries."""
+"""Where the HTTP wrappers leave a request's facts, in ``current()``, for the MCP steps it carries."""
 
 
 @dataclass
@@ -156,11 +194,11 @@ class Runtime:
         self._spans_lock = threading.Lock()
 
     def state(self, ctx: otel_context.Context | None = None) -> RequestState | None:
-        value = otel_context.get_value(self.state_key, ctx)
+        value = otel_context.get_value(self.state_key, current() if ctx is None else ctx)
         return value if isinstance(value, RequestState) else None
 
     def mark(self, ctx: otel_context.Context | None = None) -> Mark | None:
-        value = otel_context.get_value(self.mark_key, ctx)
+        value = otel_context.get_value(self.mark_key, current() if ctx is None else ctx)
         return value if isinstance(value, Mark) else None
 
     def remember(self, trace_id: int, span_id: int, meta: SpanMeta) -> None:

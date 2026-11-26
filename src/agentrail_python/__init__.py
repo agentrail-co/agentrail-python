@@ -1,8 +1,8 @@
 # Copyright 2026 Agentrail. Licensed under the Apache License, Version 2.0.
 """Agentrail for Python: backend journey evidence over OpenTelemetry.
 
-Standalone: ``agentrail = init(Options(...))``. With an existing OpenTelemetry
-setup: ``create_processors(Options(...))``, then ``bind`` your provider.
+``agentrail = init(Options(...))``, the same with or without Sentry, Datadog or
+an OpenTelemetry setup of your own: Agentrail registers no OpenTelemetry global.
 """
 
 from ._client import Client, Diagnostics, MilestoneScope
@@ -30,7 +30,6 @@ from ._options import (
     VerifiedIdentity,
 )
 from ._privacy import StructuredLog
-from ._processors import Processors, create_processors
 from ._queue import QueueStats
 from ._version import VERSION
 
@@ -57,12 +56,10 @@ __all__ = [
     "PerformanceContext",
     "PluginInvocation",
     "PrincipalKind",
-    "Processors",
     "QueueOptions",
     "QueueStats",
     "StructuredLog",
     "Surface",
     "VerifiedIdentity",
-    "create_processors",
     "init",
 ]

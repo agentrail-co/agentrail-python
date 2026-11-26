@@ -3,7 +3,8 @@
 
 ``httpx.Client(transport=agentrail_python.httpx.transport(agentrail))``. Each
 redirect passes through the transport again, so every actual destination is
-admitted on its own.
+admitted on its own. The application's headers, its tracers' included, pass
+through; only an allowed origin's traceparent is replaced by a signed one.
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from ._handoff import STRIPPED_HEADERS
 from ._outbound import begin, finish, origin
 
 if TYPE_CHECKING:
@@ -22,7 +22,9 @@ if TYPE_CHECKING:
     from ._client import Client
 
 
-def _prepare(client: Client, request: httpx.Request) -> Span | None:
+def _prepare(client: Client, request: httpx.Request) -> tuple[httpx.Request, Span | None]:
+    """The request to send, and the call's span. The application's request is left
+    as it was: httpx builds a redirect from it, never from what was sent."""
     url = request.url
     target = url.raw_path.decode("ascii")
     outgoing = begin(
@@ -33,12 +35,14 @@ def _prepare(client: Client, request: httpx.Request) -> Span | None:
         target,
         str(url),
     )
-    if outgoing.strip:
-        for name in STRIPPED_HEADERS:
-            request.headers.pop(name, None)
-    for name, value in outgoing.headers.items():
-        request.headers[name] = value
-    return outgoing.span
+    if not outgoing.changes:
+        return request, outgoing.span
+    headers = request.headers.copy()
+    for name in outgoing.remove:
+        headers.pop(name, None)
+    headers.update(outgoing.headers)
+    sent = httpx.Request(request.method, url, headers=headers, stream=request.stream, extensions=request.extensions)
+    return sent, outgoing.span
 
 
 class _Stream(httpx.SyncByteStream):
@@ -104,11 +108,11 @@ class AgentrailTransport(httpx.BaseTransport):
         self._base = base if base is not None else httpx.HTTPTransport()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        span = _prepare(self._client, request)
+        sent, span = _prepare(self._client, request)
         if span is None:
-            return self._base.handle_request(request)
+            return self._base.handle_request(sent)
         try:
-            response = self._base.handle_request(request)
+            response = self._base.handle_request(sent)
         except BaseException as error:
             finish(span, None, error)
             raise
@@ -130,11 +134,11 @@ class AgentrailAsyncTransport(httpx.AsyncBaseTransport):
         self._base = base if base is not None else httpx.AsyncHTTPTransport()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        span = _prepare(self._client, request)
+        sent, span = _prepare(self._client, request)
         if span is None:
-            return await self._base.handle_async_request(request)
+            return await self._base.handle_async_request(sent)
         try:
-            response = await self._base.handle_async_request(request)
+            response = await self._base.handle_async_request(sent)
         except BaseException as error:
             finish(span, None, error)
             raise

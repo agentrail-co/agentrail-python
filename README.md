@@ -84,6 +84,42 @@ application = agentrail.wsgi(get_wsgi_application())  # Django (WSGI)
 app.wsgi_app = agentrail.wsgi(app.wsgi_app)            # Flask, any WSGI app
 ```
 
+### Beside Sentry, Datadog or OpenTelemetry
+
+The setup above is the same when your application already runs Sentry,
+Datadog or OpenTelemetry, and there is nothing to change in theirs. They can
+start before or after `init`, and their middleware can sit outside or inside
+Agentrail's. Agentrail runs a tracer provider of its own and registers no
+OpenTelemetry global: no tracer provider, logger provider, propagator or
+context. Their spans never reach Agentrail, and Agentrail's never reach them.
+
+Inside a request, your tracer's span stays current: your database and client
+spans stay children of its server span, and its trace headers (`traceparent`,
+`tracestate`, `baggage`, `sentry-trace`, `x-datadog-*`) go out on your calls as
+it set them. Agentrail removes only its own headers,
+`x-agentrail-trace-handoff` and `x-agentrail-cli`.
+
+One limit: on a call to an origin in `outbound_origins`, Agentrail's signed
+`traceparent` replaces your tracer's, and its `tracestate` is dropped with it.
+A tracer that propagates by W3C `traceparent` alone, as OpenTelemetry does by
+default, continues that hop under Agentrail's trace ID. Sentry and Datadog keep
+their own trace there, since `sentry-trace`, `baggage` and `x-datadog-*` still
+go out. OpenTelemetry's httpx instrumentation, installed with
+`HTTPXClientInstrumentor().instrument()`, writes its `traceparent` beneath
+Agentrail's transport, after Agentrail has signed: such a call reaches the
+allowed origin with a `traceparent` the handoff does not name, and that service
+records the caller as a link instead of continuing its trace.
+
+Agentrail's capture and delivery take none of OpenTelemetry's `OTEL_*`
+environment variables, which stay your exporters' and SDK's: your
+`OTEL_EXPORTER_OTLP_*` headers, compression and certificates never reach
+Agentrail's collector, and your attribute limits never cut its spans. The one
+exception is `OTEL_SDK_DISABLED=true`, which also switches Agentrail off: it
+records nothing and reports `entry_not_recording` to `on_error`.
+
+With `DD_TRACE_OTEL_ENABLED` and `import ddtrace.auto`, import ddtrace before
+`agentrail_python`, as Datadog asks anyway.
+
 ### MCP
 
 With the official `mcp` SDK, add the middleware first. Each JSON-RPC message
@@ -149,12 +185,35 @@ configure.
 Agentrail never fails your request: anything it could not capture or send goes
 to your `on_error` callback.
 
+## Upgrading from 0.3
+
+0.4 has one setup for everyone, and removes the one for an existing
+OpenTelemetry provider:
+
+- `create_processors` and `Processors` (its `bind`, `sampler`,
+  `span_processor`, `log_processor` and `propagator`) are gone: call `init`
+  instead, and leave your provider as it was.
+- `Options.propagator` is gone: your propagator stays yours.
+- `init` no longer refuses an existing tracer or logger provider, and sets
+  none.
+- Your own spans inside a request, such as those of
+  `opentelemetry-instrumentation-*` packages, and logs written through an
+  OpenTelemetry logger provider no longer reach Agentrail. Send logs with
+  `agentrail.log` or `agentrail_python.logging.AgentrailHandler`.
+- Calls made while answering a request keep your tracer's headers; only an
+  allowed origin's `traceparent` is replaced.
+- Work in a thread you start yourself is part of the request only when the
+  thread runs in a copy of the request's context:
+  `contextvars.copy_context().run(...)` or `asyncio.to_thread` (Starlette's and
+  anyio's thread pools already do this). OpenTelemetry's threading
+  instrumentation no longer carries Agentrail's request.
+
 ## Documentation
 
 | | |
 | --- | --- |
 | [Install the Python SDK](https://www.agentrail.co/docs/guides/journeys-python) | Setup for each framework, outgoing calls, identity, milestones, logs, MCP and location |
-| [Python SDK reference](https://www.agentrail.co/docs/guides/journeys-python-reference) | Every option, an existing OpenTelemetry setup, delivery and error codes, framework notes |
+| [Python SDK reference](https://www.agentrail.co/docs/guides/journeys-python-reference) | Every option, running beside Sentry, Datadog or OpenTelemetry, delivery and error codes, framework notes |
 | [Leave out your own servers](https://www.agentrail.co/docs/guides/journeys-own-servers) | Skip calls between your own services |
 | [Plugin workflow tracking](https://www.agentrail.co/docs/guides/plugin-performance) | Report workflow attempts and plugin calls on milestones |
 | [What Agentrail records](https://www.agentrail.co/docs/guides/journeys-data) | What is sent, what is hashed, and what never leaves your process |

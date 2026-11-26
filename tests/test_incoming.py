@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 
 from agentrail_python import IncomingRequest, IPLocation, MilestoneContext
 from agentrail_python._handoff import HANDOFF_HEADER, key_id, sign
-from support import HASH_KEY, by_name, recording
+from support import HASH_KEY, by_name, calls, recording
 
 CALLER = "00-11111111111111111111111111111111-2222222222222222-01"
 
@@ -140,8 +140,7 @@ def test_location_is_on_entries_and_milestones_only() -> None:
 
         def handler(request: Request) -> None:
             rec.client.milestone("checkout", MilestoneContext(surface="custom", kind="checkout.confirm"))
-            with rec.provider.get_tracer("db").start_as_current_span("query"):
-                pass
+            calls(rec.client).post("https://inventory.example/reserve")
 
         starlette(rec.client, handler).get("/orders/7")
         spans = rec.spans()
@@ -153,7 +152,7 @@ def test_location_is_on_entries_and_milestones_only() -> None:
         }
         for name in ("HTTP GET", "checkout"):
             assert expected.items() <= by_name(spans, name)["attributes"].items()
-        assert not any(key.startswith("agentrail.client") for key in by_name(spans, "backend.operation")["attributes"])
+        assert not any(key.startswith("agentrail.client") for key in by_name(spans, "HTTP POST")["attributes"])
 
 
 @pytest.mark.parametrize(
@@ -267,3 +266,28 @@ def test_wsgi_streamed_span_stays_current_between_chunks() -> None:
         response.close()
         spans = rec.spans()
         assert by_name(spans, "inner")["parent_span_id"] == by_name(spans, "stream")["span_id"]
+
+
+# Fails if someone restores Agentrail's context without allowing for a scope
+# that closes in another context: Starlette steps a sync streamed body in a
+# fresh thread-pool copy for each chunk, so a milestone held across chunks
+# would raise into the response as it closes.
+def test_milestone_across_chunks_of_a_sync_stream() -> None:
+    from starlette.responses import StreamingResponse
+
+    with recording() as rec:
+
+        def body() -> Any:
+            with rec.client.start_milestone("streamed", MilestoneContext(surface="custom", kind="stream.chunk")):
+                yield b"a"
+                yield b"b"
+
+        async def endpoint(request: Request) -> StreamingResponse:
+            return StreamingResponse(body())
+
+        response = TestClient(rec.client.asgi(Starlette(routes=[Route("/", endpoint)]))).get("/")
+        assert response.content == b"ab"
+        spans = rec.spans()
+        entry, streamed = by_name(spans, "HTTP GET"), by_name(spans, "streamed")
+        assert streamed["parent_span_id"] == entry["span_id"]
+        assert entry["status"] == 0

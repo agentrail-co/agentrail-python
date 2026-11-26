@@ -9,6 +9,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
+from contextvars import Token
 from dataclasses import dataclass
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -33,7 +34,7 @@ from ._options import (
 from ._performance import performance_attributes
 from ._privacy import StructuredLog, clean_context, copy_log
 from ._queue import ExportQueue, QueueStats
-from ._runtime import Attributes, Mark, McpEvidence, RequestState, Runtime
+from ._runtime import Attributes, Mark, McpEvidence, RequestState, Runtime, attach, current, current_span, detach
 from ._suppression import suppressed
 from ._text import bounded, valid_text
 from ._version import VERSION
@@ -62,7 +63,8 @@ def _error_type(error: BaseException) -> str:
 class MilestoneScope:
     """A milestone around a block: ``with`` or ``async with``.
 
-    The block's exception is recorded and re-raised unchanged.
+    The block's exception is recorded and re-raised unchanged. The
+    application's own current span stays current inside it.
     """
 
     def __init__(
@@ -73,6 +75,7 @@ class MilestoneScope:
         *,
         step: bool = True,
         mcp: McpEvidence | None = None,
+        link: SpanContext | None = None,
     ) -> None:
         client._validate_milestone(name, details)  # pyright: ignore[reportPrivateUsage]
         self._client = client
@@ -80,15 +83,16 @@ class MilestoneScope:
         self._details = details
         self._step = step
         self._mcp = mcp
+        self._link = link
         self._span: Span | None = None
-        self._token: object | None = None
+        self._token: Token[otel_context.Context] | None = None
 
     def __enter__(self) -> MilestoneScope:
         span, ctx = self._client._start(  # pyright: ignore[reportPrivateUsage]
-            self._name, self._details, step=self._step, mcp=self._mcp
+            self._name, self._details, step=self._step, mcp=self._mcp, link=self._link
         )
         self._span = span
-        self._token = otel_context.attach(ctx)
+        self._token = attach(ctx)
         return self
 
     def __exit__(
@@ -107,7 +111,7 @@ class MilestoneScope:
                 span.set_attribute("error.type", _error_type(exc))
             span.end()
         finally:
-            otel_context.detach(cast(Any, token))
+            detach(token)
 
     async def __aenter__(self) -> MilestoneScope:
         return self.__enter__()
@@ -122,9 +126,10 @@ class MilestoneScope:
 
 
 class Client:
-    """Records backend evidence with a bound tracer provider.
+    """Records backend evidence with Agentrail's own tracer provider.
 
-    Get one from ``init`` or from ``create_processors(...).bind(provider)``.
+    Get one from ``init``. It registers no OpenTelemetry global and never
+    changes the application's current span.
     """
 
     def __init__(
@@ -222,33 +227,36 @@ class Client:
         *,
         step: bool = True,
         mcp: McpEvidence | None = None,
+        link: SpanContext | None = None,
     ) -> tuple[Span, otel_context.Context]:
+        """A milestone span parented on Agentrail's current span, and the context to make it current in."""
         performance = None
         if details.performance is not None:
             try:
                 performance = performance_attributes(details.performance, self._runtime.options.input.hash_key)
             except ConfigurationError:
                 self._runtime.report("invalid_performance", "context")
-        base = otel_context.get_current()
+        base = current()
         state = self._runtime.state(base)
-        continued: list[Link] = []
-        if state is not None and state.entry is not None:
-            current = trace.get_current_span(base).get_span_context()
-            if current.is_valid and (current.is_remote or current.trace_id != state.entry.trace_id):
-                # A trace continued from unsigned input inside the request (the MCP
-                # SDK continues a client's _meta traceparent) is a link, never the parent.
-                continued.append(Link(clean_context(current)))
-                base = trace.set_span_in_context(NonRecordingSpan(state.entry), base)
         if state is None:
-            external = trace.get_current_span(base).get_span_context()
-            links = [Link(clean_context(external))] if external.is_valid else []
+            # Its own managed scope: the application's span it runs in (its trace,
+            # an unrelated caller's) is a link, never the parent. When the message
+            # names a trace, a span on that trace is the library that continued it
+            # (the MCP SDK continues _meta in OpenTelemetry's context): one link.
+            external = trace.get_current_span().get_span_context()
+            continued = link is not None and external.trace_id == link.trace_id
+            links = [Link(clean_context(external))] if external.is_valid and not continued else []
             state = RequestState(links=links)
-            # Its own managed scope: an unrelated caller's trace is a link, never the parent.
             base = otel_context.set_value(self._runtime.state_key, state, otel_context.Context())
         mark = Mark(name=name, details=details, performance=performance, identity=identity, step=step, mcp=mcp)
         marked = otel_context.set_value(self._runtime.mark_key, mark, base)
         parented = trace.get_current_span(base).get_span_context().is_valid
-        span = self._tracer.start_span(name, context=marked, links=continued + ([] if parented else state.links))
+        links = [] if parented else list(state.links)
+        if link is not None:
+            # A trace the message itself names (an MCP client's _meta traceparent)
+            # is a link, never the parent.
+            links.append(Link(clean_context(link)))
+        span = self._tracer.start_span(name, context=marked, links=links)
         if not span.is_recording():
             self._runtime.report("entry_not_recording", "traces")
         return span, trace.set_span_in_context(span, base)
@@ -264,7 +272,7 @@ class Client:
             return
         span = None
         if state is not None:
-            context = trace.get_current_span().get_span_context()
+            context = current_span().get_span_context()
             span = context if context.is_valid else None
         now = time.time_ns()
         self._logs.add(copy_log(entry, now, now, span, self._runtime))

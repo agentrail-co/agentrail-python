@@ -29,3 +29,22 @@ jobs:
       - run: uv build
       - name: The built wheel works in a fresh environment (FastAPI, Flask)
         run: PYTHON="${{ matrix.python }}" scripts/check-consumer.sh
+
+  lowest-opentelemetry:
+    # The oldest OpenTelemetry and requests pyproject.toml allows, over the
+    # locked rest, on the oldest Python: what an application already pinned to
+    # them installs.
+    name: check (OpenTelemetry 1.39, requests 2.26, Python 3.10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          python-version: '3.10'
+      - run: uv sync --frozen
+      - name: Install the lowest OpenTelemetry family, its ASGI instrumentation and requests
+        run: >-
+          uv pip install --exclude-newer 2026-11-11T00:00:00Z
+          opentelemetry-api==1.39.0 opentelemetry-sdk==1.39.0 opentelemetry-exporter-otlp-proto-common==1.39.0
+          opentelemetry-instrumentation-asgi==0.60b0 requests==2.26.0
+      - run: uv run --no-sync pytest -q

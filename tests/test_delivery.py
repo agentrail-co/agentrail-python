@@ -12,10 +12,9 @@ from collections.abc import Sequence
 from typing import Generic, TypeVar
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
-from agentrail_python import CaptureCode, MilestoneContext, QueueOptions, create_processors
+from agentrail_python import CaptureCode, MilestoneContext, QueueOptions
+from agentrail_python._processors import build
 from agentrail_python._queue import BATCH_BYTES, EXPORT_BYTES, ExportQueue
 from support import BODY_BYTES, collector, options, recording
 
@@ -173,15 +172,44 @@ def test_export_failure_and_closed() -> None:
 def test_collector_rejection_is_reported() -> None:
     with collector(status=400) as state:
         errors: list[str] = []
-        processors = create_processors(options(state.url, on_error=lambda error: errors.append(error.code)))
-        provider = TracerProvider(sampler=processors.sampler(ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
+        client = build(options(state.url, on_error=lambda error: errors.append(error.code)))
         client.milestone("x", MilestoneContext(surface="custom", kind="k"))
         client.flush()
         client.shutdown()
         assert errors == ["export_failed"]
         assert client.diagnostics().spans.dropped == 1
+
+
+# Fails if someone stops retrying a collector that is briefly unavailable,
+# waits longer than its Retry-After asks, retries a batch it refused, or lets a
+# retry wait run past the export timeout.
+def test_delivery_retries_only_transient_answers_within_the_timeout() -> None:
+    step = MilestoneContext(surface="custom", kind="k")
+    with collector() as state:
+        client = build(options(state.url))
+        state.responses = [(503, {"retry-after": "0"})]
+        started = time.monotonic()
+        client.milestone("retried", step)
+        client.flush()
+        # Without the Retry-After, the first wait is a second give or take a fifth.
+        assert time.monotonic() - started < 0.5
+        assert (len(state.packets), client.diagnostics().spans.exported) == (2, 1)
+        state.responses = [(400, {})]
+        client.milestone("refused", step)
+        client.flush()
+        assert (len(state.packets), client.diagnostics().spans.dropped) == (3, 1)
+        client.shutdown()
+        state.status = 503
+        brief = QueueOptions(scheduled_delay=3600, export_timeout=0.5, flush_timeout=5, shutdown_timeout=5)
+        errors: list[str] = []
+        client = build(options(state.url, queue=brief, on_error=lambda error: errors.append(error.code)))
+        started = time.monotonic()
+        client.milestone("unavailable", step)
+        client.flush()
+        # The first wait would pass the 0.5 s timeout: no second attempt.
+        assert time.monotonic() - started < 0.8
+        assert (len(state.packets), errors) == (4, ["export_failed"])
+        client.shutdown()
 
 
 # Fails if someone makes shutdown wait without bound, or not drain what was accepted.
@@ -241,13 +269,9 @@ def test_fork_hook_does_not_keep_sessions_alive(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(_processors.requests, "Session", Session)
     with collector() as state:
-        processors = create_processors(options(state.url))
-        provider = TracerProvider(sampler=processors.sampler(ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
+        client = build(options(state.url))
         client.shutdown()
-        provider.shutdown()
-        del client, provider, processors
+        del client
     gc.collect()
     assert len(created) == 2
     assert all(reference() is None for reference in created)

@@ -1,43 +1,140 @@
 # Copyright 2026 Agentrail. Licensed under the Apache License, Version 2.0.
-"""OpenTelemetry pieces a customer's own providers are built with."""
+"""Agentrail's own tracer provider, export queues and delivery to its collector.
+
+Nothing here is registered globally: the application's OpenTelemetry setup,
+and any other tracer it runs, never sees Agentrail's spans, and Agentrail never
+sees theirs. Nothing is read from OpenTelemetry's environment variables either:
+``OTEL_*`` configure the application's own SDK and exporters.
+"""
 
 from __future__ import annotations
 
+import math
 import os
+import random
+import threading
 import time
 import weakref
-from collections.abc import Sequence
-from typing import cast
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 
 import requests
 from opentelemetry import context as otel_context
-from opentelemetry import trace
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.propagators.textmap import (
-    CarrierT,
-    Getter,
-    Setter,
-    TextMapPropagator,
-    default_getter,
-    default_setter,
-)
-from opentelemetry.sdk._logs import LogRecordProcessor, ReadableLogRecord, ReadWriteLogRecord
-from opentelemetry.sdk._logs.export import LogRecordExportResult
-from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.exporter.otlp.proto.common._log_encoder import encode_logs
+from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.sdk._logs import ReadableLogRecord
+from opentelemetry.sdk.trace import ReadableSpan, SpanLimits, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace import Span as SdkSpan
-from opentelemetry.sdk.trace.export import SpanExportResult
-from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
-from opentelemetry.trace import Link, SpanKind, TraceState
-from opentelemetry.util.types import Attributes
+from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
 from ._client import Client
-from ._handoff import OWNED_HEADERS
-from ._options import ConfigurationError, Options, resolve
-from ._privacy import StructuredLog, copy_log, copy_span, log_weight, span_weight, without_payloads
+from ._options import Options, resolve
+from ._privacy import copy_span, log_weight, span_weight, without_payloads
 from ._queue import ExportQueue
-from ._runtime import Runtime, SpanMeta
+from ._runtime import Runtime, SpanMeta, current
 from ._suppression import suppressed
+
+# The SDK's defaults, stated, so OTEL_SPAN_*_LIMIT and OTEL_ATTRIBUTE_*_LIMIT
+# (the application's) never cut Agentrail's spans: no length limit.
+_LIMITS = SpanLimits(
+    max_attributes=128,
+    max_events=128,
+    max_links=128,
+    max_span_attributes=128,
+    max_event_attributes=128,
+    max_link_attributes=128,
+    max_attribute_length=SpanLimits.UNSET,
+    max_span_attribute_length=SpanLimits.UNSET,
+)
+# What opentelemetry-exporter-otlp-proto-http 1.45 retries, and how.
+_ATTEMPTS = 6
+_JITTER = 0.2
+_RETRYABLE = frozenset((429, 502, 503, 504))
+_UNREACHABLE = (requests.ConnectionError, requests.Timeout)
+
+
+def _retry_after(value: str | None) -> float | None:
+    """The seconds a Retry-After header asks for: delay-seconds or an HTTP-date."""
+    if value is None:
+        return None
+    value = value.strip()
+    try:
+        seconds: float | None = float(value)
+    except ValueError:
+        seconds = None
+    if seconds is not None:
+        return max(seconds, 0.0) if math.isfinite(seconds) else None
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(when.timestamp() - time.time(), 0.0)
+
+
+class _Collector:
+    """One signal's path on Agentrail's collector, configured by Agentrail alone.
+
+    OpenTelemetry's OTLP exporters also take the application's
+    ``OTEL_EXPORTER_OTLP_*`` settings: its headers (a vendor's key would reach
+    Agentrail), compression, certificates and timeout. This sends the batch
+    OpenTelemetry's encoder builds with Agentrail's headers only, uncompressed,
+    over requests' own TLS.
+
+    It retries as that exporter does (1.45): six attempts at most, all within the
+    export timeout, on 429, 502, 503 and 504 and when the collector cannot be
+    reached (once at once, then with backoff), waiting 2**n seconds within 20%
+    or what Retry-After asks, never past the deadline, and not once shut down.
+    urllib3's Retry does not fit: it has no overall deadline and its waits
+    cannot be cut short at shutdown, and the queue's flush and shutdown bounds
+    rely on both.
+    """
+
+    def __init__(self, url: str, secret: str, timeout: float, session: requests.Session) -> None:
+        self._url = url
+        self._headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/x-protobuf"}
+        self._timeout = timeout
+        self._session = session
+        self._stopped = threading.Event()
+
+    def send(self, body: bytes) -> bool:
+        deadline = time.monotonic() + self._timeout
+        for attempt in range(_ATTEMPTS):
+            wait = 2**attempt * random.uniform(1 - _JITTER, 1 + _JITTER)
+            try:
+                response = self._post(body, deadline)
+            except _UNREACHABLE:
+                retryable = True
+            else:
+                if 200 <= response.status_code < 400:
+                    return True
+                retryable = response.status_code in _RETRYABLE
+                asked = _retry_after(response.headers.get("retry-after")) if retryable else None
+                if asked is not None:
+                    wait = asked
+            if not retryable or attempt + 1 == _ATTEMPTS or wait >= deadline - time.monotonic():
+                return False
+            if self._stopped.wait(wait):
+                return False
+        return False
+
+    def _post(self, body: bytes, deadline: float) -> requests.Response:
+        try:
+            return self._attempt(body, deadline)
+        except _UNREACHABLE:
+            # At once, once: usually a pooled connection the collector closed.
+            return self._attempt(body, deadline)
+
+    def _attempt(self, body: bytes, deadline: float) -> requests.Response:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise requests.Timeout("The export timeout passed before the collector answered.")
+        return self._session.post(self._url, data=body, headers=self._headers, timeout=remaining, allow_redirects=False)
+
+    def shutdown(self) -> None:
+        self._stopped.set()
+        self._session.close()
 
 
 class _SpanProcessor(SpanProcessor):
@@ -48,7 +145,7 @@ class _SpanProcessor(SpanProcessor):
     def on_start(self, span: SdkSpan, parent_context: otel_context.Context | None = None) -> None:
         if suppressed():
             return
-        ctx = otel_context.get_current() if parent_context is None else parent_context
+        ctx = current() if parent_context is None else parent_context
         state = self._runtime.state(ctx)
         if state is None:
             return
@@ -71,192 +168,51 @@ class _SpanProcessor(SpanProcessor):
         return True
 
 
-class _LogProcessor(LogRecordProcessor):
-    """Copies an OTel log record's allowlisted fields; the record itself is untouched."""
+def build(options: Options) -> Client:
+    """A client with its own tracer provider and export queues. Registers nothing globally."""
+    resolved = resolve(options)
+    runtime = Runtime(resolved)
+    secret = options.collector.secret
+    timeout = resolved.queue.export_timeout
+    span_session, log_session = requests.Session(), requests.Session()
+    traces = _Collector(f"{resolved.endpoint}/v1/traces", secret, timeout, span_session)
+    logs_collector = _Collector(f"{resolved.endpoint}/v1/logs", secret, timeout, log_session)
+    # A forked child must not write to a connection the parent still uses:
+    # it drops the pooled connections it inherited and opens its own.
+    # Weak references: a shut-down SDK's sessions are not kept alive by the hook.
+    if hasattr(os, "register_at_fork"):
+        sessions = (weakref.ref(span_session), weakref.ref(log_session))
 
-    def __init__(self, runtime: Runtime, queue: ExportQueue[ReadableLogRecord]) -> None:
-        self._runtime = runtime
-        self._queue = queue
+        def drop_inherited_connections() -> None:
+            for reference in sessions:
+                session = reference()
+                if session is not None:
+                    session.close()
 
-    def on_emit(self, log_record: ReadWriteLogRecord) -> None:
-        if suppressed():
-            return
-        if self._runtime.options.input.logs.exclude_uncorrelated and self._runtime.state() is None:
-            return
-        record = log_record.log_record
-        fields: dict[str, object] = {}
-        if isinstance(record.body, str):
-            fields["message"] = record.body
-        error_type: str | None = None
-        event_name = record.event_name
-        for key, value in (record.attributes or {}).items():
-            fields[key] = value
-            if key in ("error.type", "exception.type") and isinstance(value, str):
-                error_type = value
-            if key == "event.name" and isinstance(value, str):
-                event_name = value
-        span = None
-        if record.trace_id and record.span_id:
-            span = trace.SpanContext(record.trace_id, record.span_id, False, trace.TraceFlags(record.trace_flags or 0))
-        now = time.time_ns()
-        entry = StructuredLog(
-            severity_number=None if record.severity_number is None else record.severity_number.value,
-            severity_text=record.severity_text,
-            error_type=error_type,
-            event_name=event_name,
-            fields=fields,
-        )
-        self._queue.add(copy_log(entry, record.timestamp or now, record.observed_timestamp or now, span, self._runtime))
-
-    def shutdown(self) -> None:
-        self._queue.shutdown()
-
-    def force_flush(self, timeout_millis: int = 30000) -> bool:
-        self._queue.flush(timeout_millis / 1000)
-        return True
-
-
-class _Sampler(Sampler):
-    """Promotes a dropped span inside a managed operation to record-only."""
-
-    def __init__(self, runtime: Runtime, base: Sampler) -> None:
-        self._runtime = runtime
-        self._base = base
-
-    def should_sample(
-        self,
-        parent_context: otel_context.Context | None,
-        trace_id: int,
-        name: str,
-        kind: SpanKind | None = None,
-        attributes: Attributes = None,
-        links: Sequence[Link] | None = None,
-        trace_state: TraceState | None = None,
-    ) -> SamplingResult:
-        result = self._base.should_sample(parent_context, trace_id, name, kind, attributes, links, trace_state)
-        ctx = otel_context.get_current() if parent_context is None else parent_context
-        if result.decision == Decision.DROP and not suppressed() and self._runtime.state(ctx) is not None:
-            # The SDK starts a span with the sampler's attributes only, and a DROP
-            # carries none: keep the ones the span was started with.
-            returned = cast(Attributes, result.attributes)  # pyright: ignore[reportUnknownMemberType]
-            merged = {**(attributes or {}), **(returned or {})}
-            return SamplingResult(Decision.RECORD_ONLY, merged, result.trace_state)
-        return result
-
-    def get_description(self) -> str:
-        return f"Agentrail({self._base.get_description()})"
-
-
-class _Propagator(TextMapPropagator):
-    """Managed work is never continued from, or injected with, an unsigned header.
-
-    Unmanaged work goes to the customer's propagator.
-    """
-
-    def __init__(self, runtime: Runtime, base: TextMapPropagator | None) -> None:
-        self._runtime = runtime
-        self._base = base
-
-    def extract(
-        self,
-        carrier: CarrierT,
-        context: otel_context.Context | None = None,
-        getter: Getter[CarrierT] = default_getter,  # type: ignore[assignment]
-    ) -> otel_context.Context:
-        ctx = otel_context.get_current() if context is None else context
-        if self._runtime.state(ctx) is not None or self._base is None:
-            return ctx
-        return self._base.extract(carrier, context, getter)
-
-    def inject(
-        self,
-        carrier: CarrierT,
-        context: otel_context.Context | None = None,
-        setter: Setter[CarrierT] = default_setter,  # type: ignore[assignment]
-    ) -> None:
-        ctx = otel_context.get_current() if context is None else context
-        if self._runtime.state(ctx) is not None or suppressed() or self._base is None:
-            return
-        self._base.inject(carrier, context, setter)
-
-    @property
-    def fields(self) -> set[str]:
-        return set(OWNED_HEADERS) | (set() if self._base is None else set(self._base.fields))
-
-
-def _export_spans(exporter: OTLPSpanExporter, spans: Sequence[ReadableSpan]) -> bool:
-    return exporter.export(spans) == SpanExportResult.SUCCESS
-
-
-def _export_logs(exporter: OTLPLogExporter, records: Sequence[ReadableLogRecord]) -> bool:
-    return exporter.export(records) == LogRecordExportResult.SUCCESS
-
-
-class Processors:
-    """Construct before the customer's tracer provider; then ``bind`` that provider once.
-
-    Registers nothing globally.
-    """
-
-    def __init__(self, options: Options) -> None:
-        resolved = resolve(options)
-        self._runtime = runtime = Runtime(resolved)
-        headers = {"Authorization": f"Bearer {options.collector.secret}"}
-        timeout = resolved.queue.export_timeout
-        span_session, log_session = requests.Session(), requests.Session()
-        span_exporter = OTLPSpanExporter(
-            endpoint=f"{resolved.endpoint}/v1/traces", headers=headers, timeout=timeout, session=span_session
-        )
-        log_exporter = OTLPLogExporter(
-            endpoint=f"{resolved.endpoint}/v1/logs", headers=headers, timeout=timeout, session=log_session
-        )
-        # A forked child must not write to a connection the parent still uses:
-        # it drops the pooled connections it inherited and opens its own.
-        # Weak references: a shut-down SDK's sessions are not kept alive by the hook.
-        if hasattr(os, "register_at_fork"):
-            sessions = (weakref.ref(span_session), weakref.ref(log_session))
-
-            def drop_inherited_connections() -> None:
-                for reference in sessions:
-                    session = reference()
-                    if session is not None:
-                        session.close()
-
-            os.register_at_fork(after_in_child=drop_inherited_connections)
-        self.spans: ExportQueue[ReadableSpan] = ExportQueue(
-            "traces",
-            resolved.queue,
-            lambda batch: _export_spans(span_exporter, batch),
-            lambda code, count: runtime.report(code, "traces", count),
-            span_exporter.shutdown,
-            weigh=span_weight,
-            strip=without_payloads,
-        )
-        self.logs: ExportQueue[ReadableLogRecord] = ExportQueue(
-            "logs",
-            resolved.queue,
-            lambda batch: _export_logs(log_exporter, batch),
-            lambda code, count: runtime.report(code, "logs", count),
-            log_exporter.shutdown,
-            weigh=log_weight,
-        )
-        self.span_processor: SpanProcessor = _SpanProcessor(runtime, self.spans)
-        self.log_processor: LogRecordProcessor = _LogProcessor(runtime, self.logs)
-        self.propagator: TextMapPropagator = _Propagator(runtime, options.propagator)
-        self._bound = False
-
-    def sampler(self, base: Sampler) -> Sampler:
-        """Wrap the customer's sampler so managed spans it drops stay record-only."""
-        return _Sampler(self._runtime, base)
-
-    def bind(self, provider: trace.TracerProvider) -> Client:
-        """The client that records with ``provider``. Call once."""
-        if self._bound:
-            raise ConfigurationError("These processors are already bound to a tracer provider.")
-        self._bound = True
-        return Client(self._runtime, provider, self.spans, self.logs)
-
-
-def create_processors(options: Options) -> Processors:
-    """Agentrail's sampler wrapper, span and log processors and propagator for an existing setup."""
-    return Processors(options)
+        os.register_at_fork(after_in_child=drop_inherited_connections)
+    spans: ExportQueue[ReadableSpan] = ExportQueue(
+        "traces",
+        resolved.queue,
+        lambda batch: traces.send(encode_spans(batch).SerializePartialToString()),
+        lambda code, count: runtime.report(code, "traces", count),
+        traces.shutdown,
+        weigh=span_weight,
+        strip=without_payloads,
+    )
+    logs: ExportQueue[ReadableLogRecord] = ExportQueue(
+        "logs",
+        resolved.queue,
+        lambda batch: logs_collector.send(encode_logs(batch).SerializePartialToString()),
+        lambda code, count: runtime.report(code, "logs", count),
+        logs_collector.shutdown,
+        weigh=log_weight,
+    )
+    # Every span this provider starts is Agentrail's own, so all are sampled;
+    # the client's shutdown (``init`` runs it at exit) ends the provider too.
+    # OTEL_SDK_DISABLED, read by the SDK's provider itself, still turns it off:
+    # its tracer records nothing, reported as entry_not_recording.
+    provider = TracerProvider(sampler=ALWAYS_ON, resource=runtime.resource, span_limits=_LIMITS, shutdown_on_exit=False)
+    provider.add_span_processor(_SpanProcessor(runtime, spans))
+    client = Client(runtime, provider, spans, logs)
+    client._on_shutdown.append(provider.shutdown)  # pyright: ignore[reportPrivateUsage]
+    return client

@@ -3,8 +3,10 @@
 
 ``session.mount("https://", agentrail_python.requests.adapter(agentrail))``.
 Each redirect is sent through the adapter again, so every actual destination is
-admitted on its own. The call's step ends when ``send`` returns: with
-``stream=True`` it does not wait for the body.
+admitted on its own. The application's headers, its tracers' included, pass
+through; only an allowed origin's traceparent is replaced by a signed one. The
+call's step ends when ``send`` returns: with ``stream=True`` it does not wait
+for the body.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from urllib.parse import urlsplit
 from requests import PreparedRequest, Response
 from requests.adapters import HTTPAdapter
 
-from ._handoff import STRIPPED_HEADERS
 from ._outbound import begin, finish, origin
 
 if TYPE_CHECKING:
@@ -47,14 +48,18 @@ class AgentrailAdapter(HTTPAdapter):
             target,
             url,
         )
-        if outgoing.strip:
-            for name in STRIPPED_HEADERS:
-                request.headers.pop(name, None)
-        request.headers.update(outgoing.headers)
+        sent = request
+        if outgoing.changes:
+            # A copy: requests builds a redirect from the application's request,
+            # never from what was sent.
+            sent = request.copy()
+            for name in outgoing.remove:
+                sent.headers.pop(name, None)
+            sent.headers.update(outgoing.headers)
         if outgoing.span is None:
-            return super().send(request, stream, timeout, verify, cert, proxies)
+            return super().send(sent, stream, timeout, verify, cert, proxies)
         try:
-            response = super().send(request, stream, timeout, verify, cert, proxies)
+            response = super().send(sent, stream, timeout, verify, cert, proxies)
         except BaseException as error:
             finish(outgoing.span, None, error)
             raise

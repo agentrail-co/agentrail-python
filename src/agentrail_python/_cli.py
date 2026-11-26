@@ -18,7 +18,7 @@ import http_sf
 
 from ._runtime import Attributes
 
-CLI_HEADER = "x-agentrail-cli"  # also in ``_handoff.STRIPPED_HEADERS``
+CLI_HEADER = "x-agentrail-cli"  # also in ``_handoff.AGENTRAIL_HEADERS``
 
 _TEXT = re.compile(r"[\x20-\x7e]{1,64}")
 _COMMAND = re.compile(r"[\x20-\x7e]{1,128}")

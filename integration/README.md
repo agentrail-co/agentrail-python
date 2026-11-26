@@ -9,10 +9,11 @@ ARGUS_DIR=/absolute/path/to/argus ./integration/run.sh
 
 `capture.py` uses the public package: a Starlette app behind the ASGI
 middleware identifies a synthetic user, opens a custom milestone, writes two
-correlated logs and makes an outgoing `httpx` call beneath a supporting
-OpenTelemetry span, with a synthetic location hook. A local collector keeps the
-exact OTLP protobuf bytes. There are no provider calls, real identities or
-production credentials; the collector token and hash key are synthetic.
+correlated logs and makes an outgoing `httpx` call to an allowed origin, the
+milestone's supporting span, with a synthetic location hook. A local collector
+keeps the exact OTLP protobuf bytes. There are no provider calls, real
+identities or production credentials; the collector token and hash key are
+synthetic.
 
 The runner copies `argus-receiver.integration.test.ts` into a uniquely named
 temporary Argus API test, then runs `pnpm --filter @argus/api test:file`.
@@ -21,7 +22,7 @@ database. The test creates a backend (`node`) journey source through the public
 API, sends the captured bytes logs first and trace batches reversed, then
 repeats every delivery unchanged. Fresh reads check that:
 
-- four spans and two logs are stored once, through the retries;
+- three spans and two logs are stored once, through the retries;
 - the resource keeps `agentrail-python`, its service identity and hash key ID;
 - the HTTP entry and the milestone are both entries, with supporting spans
   beneath the milestone;

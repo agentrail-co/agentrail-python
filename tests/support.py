@@ -41,6 +41,8 @@ class Collector:
     url: str
     packets: list[tuple[str, bytes, dict[str, str]]] = field(default_factory=lambda: [])
     status: int = 200
+    responses: list[tuple[int, dict[str, str]]] = field(default_factory=lambda: [])
+    """Answers for the next requests, in order, before ``status`` answers the rest."""
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def spans(self) -> list[dict[str, Any]]:
@@ -110,7 +112,8 @@ def collector(status: int = 200) -> Iterator[Collector]:
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(length)
             signal = self.path.rsplit("/", 1)[-1]
-            status = state.status
+            with state.lock:
+                status, extra = state.responses.pop(0) if state.responses else (state.status, {})
             if length > BODY_BYTES:
                 status = 413
             else:
@@ -118,6 +121,8 @@ def collector(status: int = 200) -> Iterator[Collector]:
                     state.packets.append((signal, body, {k.lower(): v for k, v in self.headers.items()}))
             self.send_response(status)
             self.send_header("content-type", "application/x-protobuf")
+            for name, value in extra.items():
+                self.send_header(name, value)
             self.send_header("content-length", "0")
             self.end_headers()
 
@@ -151,10 +156,11 @@ def options(url: str, **overrides: Any) -> Options:
 @dataclass
 class Recording:
     client: Any
-    provider: Any
     collector: Collector
     errors: list[Any]
-    processors: Any
+    customer: Any
+    """The application's own tracer provider, never registered globally, with ``exported`` holding its spans."""
+    exported: Any
 
     def spans(self) -> list[dict[str, Any]]:
         self.client.flush()
@@ -169,24 +175,34 @@ class Recording:
 
 
 @contextmanager
-def recording(sampler: Any = None, **overrides: Any) -> Iterator[Recording]:
+def recording(**overrides: Any) -> Iterator[Recording]:
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from agentrail_python import create_processors
+    from agentrail_python._processors import build
 
     errors: list[Any] = []
     with collector() as state:
         overrides.setdefault("on_error", errors.append)
-        processors = create_processors(options(state.url, **overrides))
-        provider = TracerProvider(sampler=processors.sampler(sampler or ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
+        client = build(options(state.url, **overrides))
+        customer = TracerProvider()
+        exported = InMemorySpanExporter()
+        customer.add_span_processor(SimpleSpanProcessor(exported))
         try:
-            yield Recording(client, provider, state, errors, processors)
+            yield Recording(client, state, errors, customer, exported)
         finally:
             client.shutdown()
-            provider.shutdown()
+            customer.shutdown()
+
+
+def calls(client: Any) -> Any:
+    """An httpx client whose calls go through Agentrail's transport and never leave the process."""
+    import httpx
+
+    from agentrail_python.httpx import transport
+
+    return httpx.Client(transport=transport(client, httpx.MockTransport(lambda request: httpx.Response(200))))
 
 
 def by_name(spans: list[dict[str, Any]], name: str) -> dict[str, Any]:

@@ -25,7 +25,7 @@ from agentrail_python import (
 )
 from agentrail_python._handoff import keyed_hash
 from agentrail_python._performance import operation_hash
-from support import HASH_KEY, by_name, recording
+from support import HASH_KEY, by_name, calls, recording
 
 STEP = MilestoneContext(surface="custom", kind="checkout.confirm")
 NAMESPACE = "11111111-1111-4111-8111-111111111111"
@@ -140,11 +140,12 @@ def test_milestone_keeps_results_and_exceptions() -> None:
         assert "4242" not in repr(spans)
 
 
-# Fails if someone parents a standalone milestone on an unrelated caller's span
-# instead of starting its own scope with a link, or nests supporting spans wrong.
+# Fails if someone parents a standalone milestone on the application's span
+# instead of starting its own scope with a link, nests its steps wrong, or takes
+# the application's current span away inside it.
 def test_standalone_milestone_scope() -> None:
     with recording() as rec:
-        outside = rec.provider.get_tracer("customer")
+        outside = rec.customer.get_tracer("customer")
         with outside.start_as_current_span("customer job") as job, rec.client.start_milestone("job.step", STEP):
             with outside.start_as_current_span("supporting"):
                 pass
@@ -154,9 +155,10 @@ def test_standalone_milestone_scope() -> None:
         context = job.get_span_context()
         assert step["parent_span_id"] == ""
         assert step["links"] == [(f"{context.trace_id:032x}", f"{context.span_id:016x}", "")]
-        assert by_name(spans, "backend.operation")["parent_span_id"] == step["span_id"]
         assert by_name(spans, "instant")["parent_span_id"] == step["span_id"]
-        assert "customer job" not in [span["name"] for span in spans]
+        assert sorted(span["name"] for span in spans) == ["instant", "job.step"]
+        supporting = next(span for span in rec.exported.get_finished_spans() if span.name == "supporting")
+        assert supporting.parent is not None and supporting.parent.span_id == context.span_id
 
 
 # Fails if someone accepts an invalid milestone label.
@@ -176,13 +178,10 @@ def test_performance_evidence() -> None:
             event_name="delivery.requested",
             plugin=PluginInvocation(binding_id=BINDING, invocation_id="opaque-invocation"),
         )
-        with (
-            rec.client.start_milestone(
-                "delivery.requested", MilestoneContext(surface="custom", kind="business.event", performance=performance)
-            ),
-            rec.provider.get_tracer("db").start_as_current_span("child"),
+        with rec.client.start_milestone(
+            "delivery.requested", MilestoneContext(surface="custom", kind="business.event", performance=performance)
         ):
-            pass
+            calls(rec.client).get("https://inventory.example/items")
         spans = rec.spans()
         assert (
             by_name(spans, "delivery.requested")["attributes"].items()
@@ -196,7 +195,7 @@ def test_performance_evidence() -> None:
                 "agentrail.plugin.invocation_id": "opaque-invocation",
             }.items()
         )
-        assert not any(key.startswith("agentrail.") for key in by_name(spans, "backend.operation")["attributes"])
+        assert not any(key.startswith("agentrail.") for key in by_name(spans, "HTTP GET")["attributes"])
         assert "attempt-secret-77" not in repr(spans)
 
 
