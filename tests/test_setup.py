@@ -33,11 +33,12 @@ from support import options
 # Fails if someone accepts a configuration that would leak credentials, sign
 # for an inexact origin, or deadlock delivery.
 def test_invalid_options(change: dict[str, object]) -> None:
-    from agentrail_python import CollectorOptions, init
+    from agentrail_python import CollectorOptions
+    from agentrail_python._processors import build
 
     endpoint = change.pop("collector_endpoint", "https://collector.test/ingest/otlp")
     with pytest.raises(ConfigurationError):
-        init(options("x", collector=CollectorOptions(endpoint=str(endpoint), secret="s"), **change))
+        build(options("x", collector=CollectorOptions(endpoint=str(endpoint), secret="s"), **change))
 
 
 INIT = textwrap.dedent(
