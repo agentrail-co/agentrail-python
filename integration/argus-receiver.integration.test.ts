@@ -243,28 +243,20 @@ describe("public Python SDK → real Argus protobuf receiver → persisted journ
         expect(summaries.reduce((sum, summary) => sum + summary.logs, 0)).toBe(
           capture.expected.logs,
         );
+        // Both logs are written inside the milestone, so both are its span's.
         expect(
-          summaries
-            .map((summary) => ({
-              eventId: summary.eventId,
-              traceId: summary.traceId,
-              spanId: summary.spanId,
-            }))
-            .sort((a, b) => String(a.spanId).localeCompare(String(b.spanId))),
-        ).toEqual(
-          [
-            {
-              eventId: eventId(capture.milestoneSpanId),
-              traceId: capture.traceId,
-              spanId: capture.milestoneSpanId,
-            },
-            {
-              eventId: eventId(capture.milestoneSpanId),
-              traceId: capture.traceId,
-              spanId: capture.supportingSpanId,
-            },
-          ].sort((a, b) => a.spanId.localeCompare(b.spanId)),
-        );
+          summaries.map((summary) => ({
+            eventId: summary.eventId,
+            traceId: summary.traceId,
+            spanId: summary.spanId,
+          })),
+        ).toEqual([
+          {
+            eventId: eventId(capture.milestoneSpanId),
+            traceId: capture.traceId,
+            spanId: capture.milestoneSpanId,
+          },
+        ]);
         expect(
           summaries.reduce((sum, summary) => sum + summary.errors, 0),
         ).toBe(1);

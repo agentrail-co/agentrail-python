@@ -8,13 +8,10 @@ import sys
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict
 from urllib.parse import SplitResult, urlsplit
 
 from ._text import valid_text, well_formed
-
-if TYPE_CHECKING:
-    from opentelemetry.propagators.textmap import TextMapPropagator
 
 PrincipalKind = Literal["user", "agent_registration", "agent_instance", "oauth_client", "api_key"]
 PRINCIPAL_KINDS: frozenset[str] = frozenset(("user", "agent_registration", "agent_instance", "oauth_client", "api_key"))
@@ -126,7 +123,6 @@ class Options:
     incoming_location: Callable[[IncomingRequest], IPLocation | None] | None = None
     logs: LogsOptions = field(default_factory=LogsOptions)
     queue: QueueOptions = field(default_factory=QueueOptions)
-    propagator: TextMapPropagator | None = None
     on_error: Callable[[CaptureError], None] | None = None
 
 

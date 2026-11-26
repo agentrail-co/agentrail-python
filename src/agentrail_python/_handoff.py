@@ -17,12 +17,16 @@ from dataclasses import dataclass
 from ._text import js_json, well_formed
 
 HANDOFF_HEADER = "x-agentrail-trace-handoff"
-# Headers a managed request never forwards as received.
-OWNED_HEADERS = ("traceparent", "tracestate", "baggage", "sentry-trace", HANDOFF_HEADER)
-# What a managed request never sends on as the server received it: the owned
-# trace headers, and a CLI's x-agentrail-cli, which names its run and session
-# to this server alone.
-STRIPPED_HEADERS = (*OWNED_HEADERS, "x-agentrail-cli")
+# Agentrail's own headers, which a managed call never sends on as the server
+# received them: a handoff binds one request, and a CLI's x-agentrail-cli names
+# its run and session to this server alone. Every other header is the
+# application's, its tracers' included, and is left alone.
+AGENTRAIL_HEADERS = (HANDOFF_HEADER, "x-agentrail-cli")
+# What a call to an allowed origin loses with the application's traceparent,
+# which the signed one replaces: the vendor state that belonged to it.
+SIGNED_REPLACES = ("traceparent", "tracestate")
+# What a managed call to the collector itself never carries.
+COLLECTOR_STRIPPED = ("traceparent", "tracestate", "baggage", "sentry-trace", *AGENTRAIL_HEADERS)
 MAX_AGE_MS = 60_000
 _MAX_SAFE_INTEGER = 9_007_199_254_740_991
 

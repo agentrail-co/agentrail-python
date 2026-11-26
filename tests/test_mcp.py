@@ -559,6 +559,27 @@ def test_client_traceparent_is_only_a_link() -> None:
         assert (remote_trace, remote_span) in [(link[0], link[1]) for link in tool["links"]]
 
 
+# Fails if a wrapped function that is the step, behind the ASGI wrapper without
+# the middleware, loses the client's _meta traceparent, or takes it as its
+# parent instead of a link beneath its HTTP request.
+def test_handler_step_links_the_client_traceparent() -> None:
+    remote_trace, remote_span = "ab" * 16, "cd" * 8
+    meta = {"traceparent": f"00-{remote_trace}-{remote_span}-01"}
+    call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "whoami", "arguments": {}, "_meta": meta},
+    }
+    with recording() as rec:
+        stateful_session(rec, [call], middleware=False)
+        spans = rec.spans()
+        tool = by_name(spans, "mcp.tools/call:whoami")
+        entries = {span["span_id"]: span["trace_id"] for span in spans if span["name"] == "HTTP POST"}
+        assert tool["trace_id"] == entries[tool["parent_span_id"]] != remote_trace
+        assert [(link[0], link[1]) for link in tool["links"]] == [(remote_trace, remote_span)]
+
+
 # Fails if the plaintext multi-round-trip state, which the SDK unseals before
 # and seals after this middleware, reaches the redact hook or an export.
 def test_request_state_never_leaves_in_a_payload() -> None:
@@ -590,7 +611,7 @@ def test_request_state_never_leaves_in_a_payload() -> None:
 def test_spent_payload_budget_skips_the_hook() -> None:
     calls: list[McpPayload] = []
     with recording() as rec:
-        rec.processors.spans._payload_budget = 0  # pyright: ignore[reportPrivateUsage]
+        rec.client._spans._payload_budget = 0  # pyright: ignore[reportPrivateUsage]
         capture = mcp_capture(rec.client, capture_payloads=CapturePayloads(redact=lambda p: calls.append(p) or p))
         app = server(capture)
 

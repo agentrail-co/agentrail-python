@@ -11,7 +11,7 @@ from opentelemetry import context as otel_context
 from opentelemetry.trace import StatusCode
 
 from ._options import IncomingRequest
-from ._runtime import REQUEST_FACTS, RequestFacts
+from ._runtime import REQUEST_FACTS, RequestFacts, attach, detach
 
 if TYPE_CHECKING:
     from ._client import Client
@@ -99,7 +99,10 @@ class AgentrailASGIMiddleware:
                 status.append(int(message["status"]))
             await send(message)
 
-        token = otel_context.attach(ctx)
+        # Agentrail's own context, never OpenTelemetry's: the application's
+        # tracer keeps its current span, and middleware of its own inside this
+        # one cannot reset the request.
+        token = attach(ctx)
         try:
             await self.app(scope, receive, observed_send)
         except BaseException as error:
@@ -118,4 +121,4 @@ class AgentrailASGIMiddleware:
                     span.set_attribute("http.route", route)
                 span.end()
             finally:
-                otel_context.detach(token)
+                detach(token)

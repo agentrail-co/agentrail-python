@@ -151,10 +151,11 @@ def options(url: str, **overrides: Any) -> Options:
 @dataclass
 class Recording:
     client: Any
-    provider: Any
     collector: Collector
     errors: list[Any]
-    processors: Any
+    customer: Any
+    """The application's own tracer provider, never registered globally, with ``exported`` holding its spans."""
+    exported: Any
 
     def spans(self) -> list[dict[str, Any]]:
         self.client.flush()
@@ -169,24 +170,34 @@ class Recording:
 
 
 @contextmanager
-def recording(sampler: Any = None, **overrides: Any) -> Iterator[Recording]:
+def recording(**overrides: Any) -> Iterator[Recording]:
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from agentrail_python import create_processors
+    from agentrail_python._processors import build
 
     errors: list[Any] = []
     with collector() as state:
         overrides.setdefault("on_error", errors.append)
-        processors = create_processors(options(state.url, **overrides))
-        provider = TracerProvider(sampler=processors.sampler(sampler or ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
+        client = build(options(state.url, **overrides))
+        customer = TracerProvider()
+        exported = InMemorySpanExporter()
+        customer.add_span_processor(SimpleSpanProcessor(exported))
         try:
-            yield Recording(client, provider, state, errors, processors)
+            yield Recording(client, state, errors, customer, exported)
         finally:
             client.shutdown()
-            provider.shutdown()
+            customer.shutdown()
+
+
+def calls(client: Any) -> Any:
+    """An httpx client whose calls go through Agentrail's transport and never leave the process."""
+    import httpx
+
+    from agentrail_python.httpx import transport
+
+    return httpx.Client(transport=transport(client, httpx.MockTransport(lambda request: httpx.Response(200))))
 
 
 def by_name(spans: list[dict[str, Any]], name: str) -> dict[str, Any]:

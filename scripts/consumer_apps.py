@@ -51,7 +51,7 @@ def serve(server: Any) -> None:
 def main() -> None:
     collector = ThreadingHTTPServer(("127.0.0.1", 0), Collector)
     serve(collector)
-    agentrail = ar.create_processors(
+    client = ar.init(
         ar.Options(
             collector=ar.CollectorOptions(
                 endpoint=f"http://127.0.0.1:{collector.server_address[1]}", secret="synthetic"
@@ -60,12 +60,6 @@ def main() -> None:
             service_name="consumer-check",
         )
     )
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.sampling import ALWAYS_ON
-
-    provider = TracerProvider(sampler=agentrail.sampler(ALWAYS_ON))
-    provider.add_span_processor(agentrail.span_processor)
-    client = agentrail.bind(provider)
 
     api = FastAPI()
 

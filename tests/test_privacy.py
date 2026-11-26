@@ -8,8 +8,6 @@ import logging
 from typing import Any
 
 import pytest
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.trace import SpanKind
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -21,19 +19,10 @@ from agentrail_python import LogsOptions, MilestoneContext, StructuredLog, Verif
 from agentrail_python._privacy import sanitized_url, selected_body
 from agentrail_python._text import utf16_length
 from agentrail_python.logging import AgentrailHandler
-from support import by_name, recording
+from support import by_name, calls, recording
 
 MARKER = "028T5CY4TQKFFX"
 STEP = MilestoneContext(surface="custom", kind="checkout.confirm")
-
-
-class Keep(SpanExporter):
-    def __init__(self) -> None:
-        self.spans: list[ReadableSpan] = []
-
-    def export(self, spans: Any) -> SpanExportResult:
-        self.spans.extend(spans)
-        return SpanExportResult.SUCCESS
 
 
 # Fails if someone exports query values other than valid ``h`` markers, a
@@ -46,13 +35,13 @@ def test_urls_keep_only_valid_markers() -> None:
     assert sanitized_url("https://shop.test/" + "a" * 5000) is None
 
 
-# Fails if someone exports span attributes, events, exception messages or names
-# from supporting work, or changes what the customer's own exporter receives.
-def test_supporting_spans_are_neutralized_and_customer_spans_untouched() -> None:
+# Fails if someone exports an outgoing call's query values, or the
+# application's own spans (their names, attributes, events or exception
+# messages), or changes what the application's exporter receives.
+def test_calls_are_neutralized_and_customer_spans_stay_theirs() -> None:
     with recording() as rec:
-        customer = Keep()
-        rec.provider.add_span_processor(SimpleSpanProcessor(customer))
-        tracer = rec.provider.get_tracer("db")
+        tracer = rec.customer.get_tracer("db")
+        outgoing = calls(rec.client)
 
         async def endpoint(request: Request) -> PlainTextResponse:
             with tracer.start_as_current_span(
@@ -62,17 +51,18 @@ def test_supporting_spans_are_neutralized_and_customer_spans_untouched() -> None
             ) as span:
                 span.record_exception(ValueError("private message"))
                 span.add_event("custom", {"card": "4242"})
+                outgoing.get("https://x.test/?k=secret")
             return PlainTextResponse("ok")
 
         TestClient(rec.client.asgi(Starlette(routes=[Route("/", endpoint)]))).get("/?email=a@b.test")
         spans = rec.spans()
-        supporting = by_name(spans, "backend.operation")
-        assert supporting["attributes"] == {"error.type": "ValueError", "url.full": "https://x.test/"}
-        assert supporting["events"] == []
-        assert by_name(spans, "HTTP GET")["attributes"]["url.full"] == "http://testserver/"
+        assert sorted((span["name"], span["kind"]) for span in spans) == [("HTTP GET", 2), ("HTTP GET", 3)]
+        call = next(span for span in spans if span["kind"] == 3)
+        assert call["attributes"]["url.full"] == "https://x.test/"
+        assert next(span for span in spans if span["kind"] == 2)["attributes"]["url.full"] == "http://testserver/"
         for secret in ("private message", "4242", "a@b.test", "secret", "u-1"):
             assert secret not in repr(spans)
-        original = next(span for span in customer.spans if span.name.startswith("SELECT"))
+        original = next(span for span in rec.exported.get_finished_spans() if span.name.startswith("SELECT"))
         assert original.attributes is not None and original.attributes["db.statement"] == "secret"
         assert len(original.events) == 2
 
@@ -110,7 +100,7 @@ def test_logging_handler_correlates_and_filters() -> None:
                         "o-1",
                         extra={"order_status": "failed", "email": "a@b.test", "event.name": "checkout.failed"},
                     )
-            with rec.provider.get_tracer("customer").start_as_current_span("unmanaged work"):
+            with rec.customer.get_tracer("customer").start_as_current_span("unmanaged work"):
                 logger.info("outside")
         finally:
             logger.handlers.clear()

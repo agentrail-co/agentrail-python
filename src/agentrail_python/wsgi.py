@@ -13,7 +13,7 @@ from opentelemetry import context as otel_context
 from opentelemetry.trace import Span, StatusCode
 
 from ._options import IncomingRequest
-from ._runtime import REQUEST_FACTS, RequestFacts
+from ._runtime import REQUEST_FACTS, RequestFacts, attach, detach
 
 if TYPE_CHECKING:
     from ._client import Client
@@ -141,12 +141,13 @@ class AgentrailWSGIMiddleware:
             return start_response(status_line, headers, exc_info) if exc_info else start_response(status_line, headers)
 
         # The application and its body run in one context of their own, holding
-        # the request: what they set carries from the call to every chunk.
-        token = otel_context.attach(ctx)
+        # the request in Agentrail's slot: what they set carries from the call to
+        # every chunk. The application's tracer keeps its own current span.
+        token = attach(ctx)
         try:
             run = contextvars.copy_context()
         finally:
-            otel_context.detach(token)
+            detach(token)
         try:
             body = run.run(self.app, environ, observed_start)
         except BaseException as error:

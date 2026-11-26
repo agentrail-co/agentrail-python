@@ -18,9 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.sampling import ALWAYS_ON
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+from opentelemetry.proto.trace.v1.trace_pb2 import Span
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
@@ -67,8 +66,12 @@ def run(output: Path) -> None:
         def log_message(self, format: str, *args: Any) -> None:
             return
 
+    parents: list[str] = []
+
     class Target(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            # An allowed origin: the call's span signs its own traceparent.
+            parents.append(self.headers.get("traceparent", ""))
             self.send_response(204)
             self.end_headers()
 
@@ -78,12 +81,13 @@ def run(output: Path) -> None:
     errors: list[ar.CaptureError] = []
     result: dict[str, Any] = {"provenance": "synthetic public Python SDK; no provider calls or production credentials"}
     with server(Collector) as collector_url, server(Target) as target_url:
-        processors = ar.create_processors(
+        client = ar.init(
             ar.Options(
                 collector=ar.CollectorOptions(endpoint=collector_url, secret="synthetic-local-collector"),
                 hash_key=HASH_KEY,
                 service_name="synthetic-python-service",
                 service_instance_id="synthetic-python-instance",
+                outbound_origins=(target_url,),
                 queue=ar.QueueOptions(scheduled_delay=3600),
                 incoming_location=lambda request: ar.IPLocation(
                     country="US", region="Washington", city="Seattle", source="source"
@@ -91,15 +95,9 @@ def run(output: Path) -> None:
                 on_error=errors.append,
             )
         )
-        provider = TracerProvider(sampler=processors.sampler(ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
         outbound = httpx.Client(transport=transport(client))
 
         async def checkout(request: Request) -> Response:
-            context = trace.get_current_span().get_span_context()
-            result["traceId"] = f"{context.trace_id:032x}"
-            result["rootSpanId"] = f"{context.span_id:016x}"
             client.identify(
                 ar.VerifiedIdentity(
                     kind="user", id="synthetic-python-user", acting_user_id="synthetic-python-acting-user"
@@ -108,19 +106,17 @@ def run(output: Path) -> None:
             with client.start_milestone(
                 "synthetic.checkout", ar.MilestoneContext(surface="custom", kind="checkout.confirm")
             ):
-                result["milestoneSpanId"] = f"{trace.get_current_span().get_span_context().span_id:016x}"
                 client.log(ar.StructuredLog(severity_number=9, severity_text="INFO", event_name="synthetic.milestone"))
-                with provider.get_tracer("synthetic-support").start_as_current_span("synthetic database work") as span:
-                    result["supportingSpanId"] = f"{span.get_span_context().span_id:016x}"
-                    client.log(
-                        ar.StructuredLog(
-                            severity_number=17,
-                            severity_text="ERROR",
-                            error_type="SyntheticError",
-                            event_name="synthetic.supporting",
-                        )
+                client.log(
+                    ar.StructuredLog(
+                        severity_number=17,
+                        severity_text="ERROR",
+                        error_type="SyntheticError",
+                        event_name="synthetic.supporting",
                     )
-                    outbound.get(f"{target_url}/synthetic-target").raise_for_status()
+                )
+                # The outgoing call is the milestone's supporting span.
+                outbound.get(f"{target_url}/synthetic-target").raise_for_status()
             return Response(status_code=204)
 
         app = client.asgi(Starlette(routes=[Route("/synthetic-checkout", checkout, methods=["POST"])]))
@@ -129,13 +125,29 @@ def run(output: Path) -> None:
             raise SystemExit(f"synthetic request status {response.status_code}")
         client.flush()
         client.shutdown()
-        provider.shutdown()
+    spans = [
+        span
+        for packet in packets
+        if packet["signal"] == "traces"
+        for group in ExportTraceServiceRequest.FromString(base64.b64decode(packet["protobuf"])).resource_spans
+        for scope in group.scope_spans
+        for span in scope.spans
+    ]
+    (entry,) = [span for span in spans if span.kind == Span.SPAN_KIND_SERVER]
+    (milestone,) = [span for span in spans if span.name == "synthetic.checkout"]
+    (call,) = [span for span in spans if span.kind == Span.SPAN_KIND_CLIENT]
+    if len(parents) != 1 or not parents[0].startswith(f"00-{call.trace_id.hex()}-{call.span_id.hex()}-"):
+        raise SystemExit("the allowed origin did not receive the call's own traceparent")
+    result["traceId"] = entry.trace_id.hex()
+    result["rootSpanId"] = entry.span_id.hex()
+    result["milestoneSpanId"] = milestone.span_id.hex()
+    result["supportingSpanId"] = call.span_id.hex()
     if errors:
         raise SystemExit(f"capture reported {len(errors)} errors: {[error.code for error in errors]}")
     if {packet["signal"] for packet in packets} != {"traces", "logs"}:
         raise SystemExit(f"expected traces and logs exports; got {len(packets)} packets")
     result["exports"] = packets
-    result["expected"] = {"entries": 2, "spans": 4, "logs": 2}
+    result["expected"] = {"entries": 2, "spans": 3, "logs": 2}
     output.write_text(json.dumps(result, indent=2) + "\n", "utf-8")
     output.chmod(0o600)
 

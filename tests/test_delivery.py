@@ -12,10 +12,9 @@ from collections.abc import Sequence
 from typing import Generic, TypeVar
 
 import pytest
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.sampling import ALWAYS_ON
 
-from agentrail_python import CaptureCode, MilestoneContext, QueueOptions, create_processors
+from agentrail_python import CaptureCode, MilestoneContext, QueueOptions
+from agentrail_python._processors import build
 from agentrail_python._queue import BATCH_BYTES, EXPORT_BYTES, ExportQueue
 from support import BODY_BYTES, collector, options, recording
 
@@ -173,10 +172,7 @@ def test_export_failure_and_closed() -> None:
 def test_collector_rejection_is_reported() -> None:
     with collector(status=400) as state:
         errors: list[str] = []
-        processors = create_processors(options(state.url, on_error=lambda error: errors.append(error.code)))
-        provider = TracerProvider(sampler=processors.sampler(ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
+        client = build(options(state.url, on_error=lambda error: errors.append(error.code)))
         client.milestone("x", MilestoneContext(surface="custom", kind="k"))
         client.flush()
         client.shutdown()
@@ -241,13 +237,9 @@ def test_fork_hook_does_not_keep_sessions_alive(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(_processors.requests, "Session", Session)
     with collector() as state:
-        processors = create_processors(options(state.url))
-        provider = TracerProvider(sampler=processors.sampler(ALWAYS_ON))
-        provider.add_span_processor(processors.span_processor)
-        client = processors.bind(provider)
+        client = build(options(state.url))
         client.shutdown()
-        provider.shutdown()
-        del client, provider, processors
+        del client
     gc.collect()
     assert len(created) == 2
     assert all(reference() is None for reference in created)
