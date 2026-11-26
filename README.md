@@ -108,6 +108,13 @@ Agentrail's transport, after Agentrail has signed: such a call reaches the
 allowed origin with a `traceparent` the handoff does not name, and that service
 records the caller as a link instead of continuing its trace.
 
+Agentrail's capture and delivery take none of OpenTelemetry's `OTEL_*`
+environment variables, which stay your exporters' and SDK's: your
+`OTEL_EXPORTER_OTLP_*` headers, compression and certificates never reach
+Agentrail's collector, and your attribute limits never cut its spans. The one
+exception is `OTEL_SDK_DISABLED=true`, which also switches Agentrail off: it
+records nothing and reports `entry_not_recording` to `on_error`.
+
 ### MCP
 
 With the official `mcp` SDK, add the middleware first. Each JSON-RPC message

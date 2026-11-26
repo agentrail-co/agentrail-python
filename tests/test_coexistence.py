@@ -24,7 +24,7 @@ import pytest
 
 from agentrail_python._handoff import HANDOFF_HEADER, verify
 from coexistence import DD_TRACE, SPAN, TRACE
-from support import HASH_KEY
+from support import HASH_KEY, SECRET
 
 SCRIPT = Path(__file__).parent / "coexistence.py"
 CLIENTS = ("httpx", "requests")
@@ -34,6 +34,19 @@ DATADOG = {
     "DD_INSTRUMENTATION_TELEMETRY_ENABLED": "false",
     "DD_REMOTE_CONFIGURATION_ENABLED": "false",
     "DD_TRACE_STARTUP_LOGS": "false",
+}
+
+
+# How an application configures its own OpenTelemetry exporters and SDK.
+OTEL_ENVIRONMENT = {
+    "OTEL_EXPORTER_OTLP_HEADERS": "x-vendor-key=customer-vendor-secret,authorization=Basic customer",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-vendor-traces=customer-traces-secret",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "x-vendor-logs=customer-logs-secret",
+    "OTEL_EXPORTER_OTLP_COMPRESSION": "gzip",
+    "OTEL_EXPORTER_OTLP_CERTIFICATE": "/nonexistent/customer-ca.pem",
+    "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE": "/nonexistent/customer-client.pem",
+    "OTEL_EXPORTER_OTLP_CLIENT_KEY": "/nonexistent/customer-client.key",
+    "OTEL_ATTRIBUTE_VALUE_LENGTH_LIMIT": "12",
 }
 
 
@@ -147,3 +160,29 @@ def test_beside_datadog(order: str, otel: bool) -> None:
         assert ordinary["tracestate"].startswith("dd=")
         assert_signed(run["outbound"][f"{client}-allowed"][0])
     assert_unchanged_capture(run, "datadog", order)
+
+
+# Fails if Agentrail's delivery or provider takes the application's OTEL_*
+# settings: its exporter headers (a vendor's key) would reach Agentrail's
+# collector, its compression change the body, its client certificate fail
+# every export, and its attribute length limit cut Agentrail's spans.
+def test_the_application_s_otel_environment_stays_its_own() -> None:
+    run = scenario("environment", env=OTEL_ENVIRONMENT)
+    assert sorted(request["signal"] for request in run["requests"]) == ["logs", "traces"]
+    for request in run["requests"]:
+        assert request["headers"] == [
+            "accept",
+            "accept-encoding",
+            "authorization",
+            "connection",
+            "content-length",
+            "content-type",
+            "host",
+            "user-agent",
+        ]
+        assert request["authorization"] == f"Bearer {SECRET}"
+    assert run["spans"] == [
+        {"url.full": "http://testserver/orders/1234567890", "user_agent.original": "synthetic-agent/1.0 (long enough)"}
+    ]
+    assert run["logs"] == ["order.read"]
+    assert run["errors"] == []

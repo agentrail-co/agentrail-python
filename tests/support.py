@@ -41,6 +41,8 @@ class Collector:
     url: str
     packets: list[tuple[str, bytes, dict[str, str]]] = field(default_factory=lambda: [])
     status: int = 200
+    responses: list[tuple[int, dict[str, str]]] = field(default_factory=lambda: [])
+    """Answers for the next requests, in order, before ``status`` answers the rest."""
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def spans(self) -> list[dict[str, Any]]:
@@ -110,7 +112,8 @@ def collector(status: int = 200) -> Iterator[Collector]:
             length = int(self.headers.get("content-length", "0"))
             body = self.rfile.read(length)
             signal = self.path.rsplit("/", 1)[-1]
-            status = state.status
+            with state.lock:
+                status, extra = state.responses.pop(0) if state.responses else (state.status, {})
             if length > BODY_BYTES:
                 status = 413
             else:
@@ -118,6 +121,8 @@ def collector(status: int = 200) -> Iterator[Collector]:
                     state.packets.append((signal, body, {k.lower(): v for k, v in self.headers.items()}))
             self.send_response(status)
             self.send_header("content-type", "application/x-protobuf")
+            for name, value in extra.items():
+                self.send_header(name, value)
             self.send_header("content-length", "0")
             self.end_headers()
 

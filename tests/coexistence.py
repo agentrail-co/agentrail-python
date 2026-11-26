@@ -12,7 +12,8 @@ globals, so each run gets a fresh interpreter.
   Agentrail's, ``inside`` within it.
 
 ``python tests/coexistence.py init-then-provider`` is the application setting
-its own OpenTelemetry globals after ``init``.
+its own OpenTelemetry globals after ``init``; ``environment``, a request with the
+application's ``OTEL_*`` settings in the environment.
 
 The request identifies a user, opens a milestone, logs, and calls one ordinary
 and one allowed origin through httpx and through requests, with the headers
@@ -403,8 +404,58 @@ def init_then_provider() -> dict[str, Any]:
         }
 
 
+def environment() -> dict[str, Any]:
+    """A request and a log, with the application's OpenTelemetry settings (``ENVIRONMENT``) set."""
+    import gzip
+
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from agentrail_python import StructuredLog
+    from agentrail_python._processors import build
+    from support import collector, options
+
+    errors: list[str] = []
+    with collector() as state:
+        agentrail = build(options(state.url, on_error=lambda error: errors.append(error.code)))
+
+        async def order(request: Request) -> PlainTextResponse:
+            agentrail.log(StructuredLog(event_name="order.read"))
+            return PlainTextResponse("ok")
+
+        app = agentrail.asgi(Starlette(routes=[Route("/orders/{id}", order)]))
+        TestClient(app).get("/orders/1234567890", headers={"user-agent": "synthetic-agent/1.0 (long enough)"})
+        agentrail.flush()
+        with state.lock:
+            packets = list(state.packets)
+        # Decoded whatever their encoding, so a compressed export still shows what it carried.
+        state.packets[:] = [
+            (signal, gzip.decompress(body) if headers.get("content-encoding") == "gzip" else body, headers)
+            for signal, body, headers in packets
+        ]
+        result = {
+            "requests": [
+                {"signal": signal, "headers": sorted(headers), "authorization": headers.get("authorization")}
+                for signal, _, headers in packets
+            ],
+            "spans": [
+                {key: span["attributes"].get(key) for key in ("url.full", "user_agent.original")}
+                for span in state.spans()
+            ],
+            "logs": [log["event_name"] for log in state.logs()],
+            "errors": errors,
+        }
+        agentrail.shutdown()
+    return result
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "init-then-provider":
         print(json.dumps(init_then_provider()))
+    elif sys.argv[1] == "environment":
+        print(json.dumps(environment()))
     else:
         print(json.dumps(run(sys.argv[1], sys.argv[2], sys.argv[3] == "1")))
