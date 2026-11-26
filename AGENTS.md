@@ -22,8 +22,8 @@ collector schema belongs to Argus.
   default.
 - Managed requests continue only verified signed handoffs. The actual
   destination, exact method and encoded target decide outbound admission.
-- `create_processors` registers no globals; only `init` installs providers, and
-  it refuses to replace an existing one. Customer-owned providers stay
+- `init` and the client register no OpenTelemetry globals (tracer or logger
+  provider, propagator, context). Customer-owned providers stay
   customer-owned.
 - Capacity includes the batch in flight. Preserve the application's exceptions,
   results and streaming responses. Capture problems go to `on_error`, never to
