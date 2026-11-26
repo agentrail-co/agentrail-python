@@ -100,10 +100,12 @@ it set them. Agentrail removes only its own headers,
 `x-agentrail-trace-handoff` and `x-agentrail-cli`.
 
 One limit: on a call to an origin in `outbound_origins`, Agentrail's signed
-`traceparent` replaces your tracer's, and its `tracestate` is dropped with it,
-so your tracer's trace continues under Agentrail's trace ID for that hop. Its
-other headers still go out. OpenTelemetry's httpx instrumentation, installed
-with `HTTPXClientInstrumentor().instrument()`, writes its `traceparent` beneath
+`traceparent` replaces your tracer's, and its `tracestate` is dropped with it.
+A tracer that propagates by W3C `traceparent` alone, as OpenTelemetry does by
+default, continues that hop under Agentrail's trace ID. Sentry and Datadog keep
+their own trace there, since `sentry-trace`, `baggage` and `x-datadog-*` still
+go out. OpenTelemetry's httpx instrumentation, installed with
+`HTTPXClientInstrumentor().instrument()`, writes its `traceparent` beneath
 Agentrail's transport, after Agentrail has signed: such a call reaches the
 allowed origin with a `traceparent` the handoff does not name, and that service
 records the caller as a link instead of continuing its trace.
@@ -114,6 +116,9 @@ environment variables, which stay your exporters' and SDK's: your
 Agentrail's collector, and your attribute limits never cut its spans. The one
 exception is `OTEL_SDK_DISABLED=true`, which also switches Agentrail off: it
 records nothing and reports `entry_not_recording` to `on_error`.
+
+With `DD_TRACE_OTEL_ENABLED` and `import ddtrace.auto`, import ddtrace before
+`agentrail_python`, as Datadog asks anyway.
 
 ### MCP
 
@@ -197,6 +202,11 @@ OpenTelemetry provider:
   `agentrail.log` or `agentrail_python.logging.AgentrailHandler`.
 - Calls made while answering a request keep your tracer's headers; only an
   allowed origin's `traceparent` is replaced.
+- Work in a thread you start yourself is part of the request only when the
+  thread runs in a copy of the request's context:
+  `contextvars.copy_context().run(...)` or `asyncio.to_thread` (Starlette's and
+  anyio's thread pools already do this). OpenTelemetry's threading
+  instrumentation no longer carries Agentrail's request.
 
 ## Documentation
 
