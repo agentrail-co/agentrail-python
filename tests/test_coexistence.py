@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from agentrail_python._handoff import HANDOFF_HEADER, verify
-from coexistence import DD_TRACE, SPAN, TRACE
+from coexistence import DD_TRACE, META_SPAN, META_TRACE, SPAN, TRACE
 from support import HASH_KEY, SECRET
 
 SCRIPT = Path(__file__).parent / "coexistence.py"
@@ -186,3 +186,12 @@ def test_the_application_s_otel_environment_stays_its_own() -> None:
     ]
     assert run["logs"] == ["order.read"]
     assert run["errors"] == []
+
+
+# Fails if an MCP step with no HTTP request links both a client's _meta
+# traceparent and the span the MCP SDK continued it into in the application's
+# own OpenTelemetry (one client trace, two links), or stops linking the
+# application's span when the message names no trace.
+def test_an_mcp_step_links_a_client_trace_once() -> None:
+    run = scenario("mcp-in-memory")
+    assert run["links"] == [[f"{META_TRACE}-{META_SPAN}"], ["tools/call checkout"]]

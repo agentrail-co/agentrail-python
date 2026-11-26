@@ -13,7 +13,8 @@ globals, so each run gets a fresh interpreter.
 
 ``python tests/coexistence.py init-then-provider`` is the application setting
 its own OpenTelemetry globals after ``init``; ``environment``, a request with the
-application's ``OTEL_*`` settings in the environment.
+application's ``OTEL_*`` settings in the environment; ``mcp-in-memory``, MCP
+messages with no HTTP request beside the application's global SDK provider.
 
 The request identifies a user, opens a milestone, logs, and calls one ordinary
 and one allowed origin through httpx and through requests, with the headers
@@ -452,10 +453,71 @@ def environment() -> dict[str, Any]:
     return result
 
 
+META_TRACE = "ab" * 16
+META_SPAN = "cd" * 8
+
+
+def mcp_in_memory() -> dict[str, Any]:
+    """Two tool calls with no HTTP request, one with a client ``_meta`` traceparent,
+    beside the application's own global provider: the step's links, by the span they name."""
+    import anyio
+    from mcp.client.client import Client as McpClient
+    from mcp.server.mcpserver import MCPServer
+    from mcp_types import RequestParamsMeta
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from agentrail_python._processors import build
+    from agentrail_python.mcp import mcp_capture
+    from support import collector, options
+
+    exported = InMemorySpanExporter()
+    theirs = TracerProvider()
+    theirs.add_span_processor(SimpleSpanProcessor(exported))
+    trace.set_tracer_provider(theirs)
+    with collector() as state:
+        agentrail = build(options(state.url))
+        capture = mcp_capture(agentrail)
+        app = MCPServer("orders", middleware=[capture.middleware])
+
+        def checkout(item: str) -> str:
+            return f"ordered {item}"
+
+        app.tool(name="checkout")(capture.tool("checkout", checkout))
+
+        async def calls() -> None:
+            with trace.get_tracer("customer").start_as_current_span("customer.agent"):
+                async with McpClient(app) as client:
+                    meta: RequestParamsMeta = {"traceparent": f"00-{META_TRACE}-{META_SPAN}-01"}
+                    await client.call_tool("checkout", {"item": "with-meta"}, meta=meta)
+                    await client.call_tool("checkout", {"item": "without-meta"})
+
+        anyio.run(calls)
+        agentrail.flush()
+        names = {}
+        for span in exported.get_finished_spans():
+            context = span.get_span_context()
+            assert context is not None
+            names[f"{context.span_id:016x}"] = span.name
+        steps = [
+            span
+            for span in state.spans()
+            if span["name"] == "mcp.tools/call:checkout"
+            and span["attributes"].get("agentrail.mcp.layer") == "transport"
+        ]
+        links = [[names.get(link[1], f"{link[0]}-{link[1]}") for link in span["links"]] for span in steps]
+        agentrail.shutdown()
+    return {"links": sorted(links)}
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "init-then-provider":
         print(json.dumps(init_then_provider()))
     elif sys.argv[1] == "environment":
         print(json.dumps(environment()))
+    elif sys.argv[1] == "mcp-in-memory":
+        print(json.dumps(mcp_in_memory()))
     else:
         print(json.dumps(run(sys.argv[1], sys.argv[2], sys.argv[3] == "1")))

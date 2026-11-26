@@ -60,10 +60,6 @@ def _error_type(error: BaseException) -> str:
     return bounded(type(error).__qualname__, 4096)
 
 
-def _ids(context: SpanContext) -> tuple[int, int]:
-    return context.trace_id, context.span_id
-
-
 class MilestoneScope:
     """A milestone around a block: ``with`` or ``async with``.
 
@@ -244,16 +240,19 @@ class Client:
         state = self._runtime.state(base)
         if state is None:
             # Its own managed scope: the application's span it runs in (its trace,
-            # an unrelated caller's) is a link, never the parent.
+            # an unrelated caller's) is a link, never the parent. When the message
+            # names a trace, a span on that trace is the library that continued it
+            # (the MCP SDK continues _meta in OpenTelemetry's context): one link.
             external = trace.get_current_span().get_span_context()
-            links = [Link(clean_context(external))] if external.is_valid else []
+            continued = link is not None and external.trace_id == link.trace_id
+            links = [Link(clean_context(external))] if external.is_valid and not continued else []
             state = RequestState(links=links)
             base = otel_context.set_value(self._runtime.state_key, state, otel_context.Context())
         mark = Mark(name=name, details=details, performance=performance, identity=identity, step=step, mcp=mcp)
         marked = otel_context.set_value(self._runtime.mark_key, mark, base)
         parented = trace.get_current_span(base).get_span_context().is_valid
         links = [] if parented else list(state.links)
-        if link is not None and all(_ids(link) != _ids(known.context) for known in links):
+        if link is not None:
             # A trace the message itself names (an MCP client's _meta traceparent)
             # is a link, never the parent.
             links.append(Link(clean_context(link)))
