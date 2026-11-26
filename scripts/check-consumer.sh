@@ -12,7 +12,7 @@ uv build --out-dir "$scratch/dist" >/dev/null
 wheel="$(ls "$scratch"/dist/*.whl)"
 uv venv --quiet --python "$python" "$scratch/venv"
 # Only releases at least two weeks old, as the lockfile.
-uv pip install --quiet --python "$scratch/venv/bin/python" --exclude-newer 2026-10-28T00:00:00Z \
+uv pip install --quiet --python "$scratch/venv/bin/python" --exclude-newer 2026-11-11T00:00:00Z \
   "$wheel" "fastapi>=0.115" "uvicorn>=0.38" "flask>=3.1"
 cd "$scratch"
 "$scratch/venv/bin/python" -I "$root/scripts/consumer_apps.py"

@@ -25,11 +25,13 @@ classifiers = [
   "Topic :: System :: Monitoring",
   "Typing :: Typed",
 ]
-# The tested OpenTelemetry family. Its API, SDK and exporter versions move together.
+# The OpenTelemetry family from the oldest release the suite passes on (CI's
+# lowest-opentelemetry job) to the next major. Its API, SDK and exporter
+# versions move together.
 dependencies = [
-  "opentelemetry-api>=1.45.1,<1.46",
-  "opentelemetry-sdk>=1.45.1,<1.46",
-  "opentelemetry-exporter-otlp-proto-http>=1.45.1,<1.46",
+  "opentelemetry-api>=1.39,<2",
+  "opentelemetry-sdk>=1.39,<2",
+  "opentelemetry-exporter-otlp-proto-http>=1.39,<2",
   # RFC 9651 Structured Fields, for the x-agentrail-cli header a customer's CLI sends.
   "http-sf>=1.5.0,<2",
 ]
@@ -59,6 +61,10 @@ dev = [
   "uvicorn>=0.38",
   "a2wsgi>=1.10",
   "trustme>=1.2",
+  # The tracers a customer already runs, for the tests that run beside them.
+  "sentry-sdk>=2.40",
+  "ddtrace>=4.16",
+  "opentelemetry-instrumentation-asgi>=0.60b0",
 ]
 
 [tool.hatch.version]
@@ -72,7 +78,7 @@ include = ["src", "tests", "testdata", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.uv]
 # Resolve only releases at least two weeks old when the lock was written.
-exclude-newer = "2026-10-28T00:00:00Z"
+exclude-newer = "2026-11-11T00:00:00Z"
 
 [tool.ruff]
 line-length = 120
